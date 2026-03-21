@@ -1,7 +1,7 @@
 <div align="center">
 	<h1 align="center">Go2 RL GYM</h1>
 	<p align="center">
-		<span>🌎 English</span> | <a href="README_zh.md">🇨🇳 中文</a>
+		<span>🌎 English</span> | <a href="README_zh.md">🇨🇳 中文</a> | <a href="https://arxiv.org/abs/2602.00678">📄 Paper</a>
 	</p>
 </div>
 
@@ -196,4 +196,3 @@ If you find our work helpful, please cite:
 New contributions follow the [MIT License](LICENSE); the original unitree_rl_gym remains under the [BSD 3-Clause License](LICENSE).
 
 See the complete [LICENSE file](LICENSE) for details.
-

@@ -1,7 +1,7 @@
 <div align="center">
   <h1 align="center">Go2 RL GYM</h1>
   <p align="center">
-    <a href="README.md">🌎 English</a> | <span>🇨🇳 中文</span>
+    <a href="README.md">🌎 English</a> | <span>🇨🇳 中文</span> | <a href="https://arxiv.org/abs/2602.00678">📄 Paper</a>
   </p>
 </div>
 
@@ -196,5 +196,4 @@ python deploy_real_go2.py eth0
 新增内容根据 [MIT License](./LICENSE) 授权，原仓库unitree_rl_gym根据 [BSD 3-Clause License](./LICENSE) 授权。
 
 详情请阅读完整 [LICENSE 文件](./LICENSE)。
-
 
