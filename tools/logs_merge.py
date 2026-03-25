@@ -36,7 +36,39 @@ def fast_read(event_file_path, tag_names):
                 if value.tag in tag_names:
                     tag_data[event.step][value.tag] = value.simple_value
                     
-    return pd.DataFrame(tag_data).T
+    df = pd.DataFrame(tag_data).T
+    df.index.name = 'step'
+    return df
+
+def normalize_tb_df(tb_df):
+    tb_df = tb_df.copy()
+
+    if 'step' not in tb_df.columns:
+        first_col = tb_df.columns[0] if len(tb_df.columns) > 0 else None
+        if first_col is not None and str(first_col).startswith('Unnamed:'):
+            tb_df = tb_df.rename(columns={first_col: 'step'})
+        elif tb_df.index.name == 'step':
+            tb_df = tb_df.reset_index()
+        else:
+            tb_df = tb_df.reset_index().rename(columns={'index': 'step'})
+
+    tb_df['step'] = pd.to_numeric(tb_df['step'], errors='coerce')
+    tb_df = tb_df.dropna(subset=['step'])
+    tb_df['step'] = tb_df['step'].astype(int)
+    return tb_df
+
+def get_tb_value(tb_df, step, candidate_tags):
+    row = tb_df[tb_df['step'] == step]
+    if row.empty:
+        raise KeyError(f"No tensorboard entry found for step={step}.")
+
+    for tag in candidate_tags:
+        if tag not in row.columns:
+            continue
+        values = row[tag].dropna().values
+        if len(values) > 0:
+            return float(values[0])
+    raise KeyError(f"No tensorboard value found for step={step} in tags: {candidate_tags}")
 
 class Collector:
     def __init__(self, log_dirs):
@@ -58,14 +90,14 @@ class Collector:
         self.output_tb = self.output_dir / "tb.csv"
         if self.output_tb.exists():
             print(f"Loading existing tensorboard data from {self.output_tb}")
-            self.tb_df = pd.read_csv(self.output_tb)
+            self.tb_df = normalize_tb_df(pd.read_csv(self.output_tb))
         else:
             start_time = time.time()
             print(f"Start reading tensorboard events at {time.ctime(start_time)}")
-            self.tb_df = fast_read(str(self.log_dirs.glob("events.out.tfevents.*").__next__()), [
+            self.tb_df = normalize_tb_df(fast_read(str(self.log_dirs.glob("events.out.tfevents.*").__next__()), [
                 'Terrain/terrain_level_all', 'Episode/terrain_level_all',
                 'RoboGauge/benchmark'
-            ])
+            ]))
             print(f"Finished reading tensorboard events in {time.time() - start_time:.2f} seconds.")
             self.tb_df.to_csv(self.output_tb, index=False)
             print(f"Saved tensorboard data to {self.output_tb}")
@@ -109,7 +141,11 @@ class Collector:
                 self.datas[f'{terrain_name}_mean@25'].append(float(data['robust_score'][terrain_name]['mean@25']))
                 self.datas[f'{terrain_name}_mean@50'].append(float(data['robust_score'][terrain_name]['mean@50']))
             
-            self.datas['terrain_level'].append(float(self.tb_df[self.tb_df['step'] == it]['value'].values[0]))
+            self.datas['terrain_level'].append(get_tb_value(
+                self.tb_df,
+                it,
+                ['Terrain/terrain_level_all', 'Episode/terrain_level_all']
+            ))
         df = pd.DataFrame(self.datas)
         df.to_csv(self.output_csv, index=False)
         print(f"Saved merged results to {self.output_csv}")
@@ -117,6 +153,8 @@ class Collector:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--log-dirs")
+    parser.add_argument("--read-robogauge", default=True, type=lambda x: (str(x).lower() in ['true', '1']), help="Whether to read robogauge_results")
     args = parser.parse_args()
     collector = Collector(args.log_dirs)
-    # collector.collect()
+    if args.read_robogauge:
+        collector.collect()
