@@ -298,38 +298,56 @@ class OnPolicyRunnerCTS:
         if self.robogauge_client is None:
             return
 
-        if it % 500 == 0 or last_model:
-            # export jit model
-            jit_dir = os.path.join(self.log_dir, 'jit_models')
-            jit_path = os.path.join(jit_dir, f'policy_jit_{it}.pt')
-            export_policy_as_jit(self.alg.model, jit_dir, filename=f'policy_jit_{it}.pt')
-            # upload to robogauge
-            task_name = 'go2_moe'  # Both cts, moe-cts actor return a tuple `action, (latent, ...)`
-            self.robogauge_client.submit_task(
-                model_path=jit_path,
-                step=it,
-                task_name=task_name,
-                experiment_name=self.cfg["experiment_name"]
-            )
+        try:
+            if it % 500 == 0 or last_model:
+                # export jit model
+                jit_dir = os.path.join(self.log_dir, 'jit_models')
+                jit_path = os.path.join(jit_dir, f'policy_jit_{it}.pt')
+                export_policy_as_jit(self.alg.model, jit_dir, filename=f'policy_jit_{it}.pt')
+                # upload to robogauge
+                task_name = 'go2_moe'  # Both cts, moe-cts actor return a tuple `action, (latent, ...)`
+                self.robogauge_client.submit_task(
+                    model_path=jit_path,
+                    step=it,
+                    task_name=task_name,
+                    experiment_name=self.cfg["experiment_name"]
+                )
+        except Exception as e:
+            print(f"[WARN] RoboGauge submit failed at step {it}: {e}")
+            return
         check_times = 1
         if last_model:
             check_times = int(1e9)  # keep checking until manually stopped
         while check_times > 0:
             check_times -= 1
-            self.robogauge_client.monitor_tasks()
+            try:
+                self.robogauge_client.monitor_tasks()
+            except Exception as e:
+                print(f"[WARN] RoboGauge monitor failed at step {it}: {e}")
+                break
             results_dir = os.path.join(self.log_dir, 'robogauge_results')
             os.makedirs(results_dir, exist_ok=True)
             result_received = False
             for task_id, resp in self.robogauge_client.response_data.items():
-                scores = resp['results']['scores']
-                step = resp['step']
+                if not isinstance(resp, dict):
+                    print(f"[WARN] RoboGauge returned an invalid response for task {task_id}: {resp}")
+                    continue
+                results = resp.get('results')
+                step = resp.get('step', it)
+                if results is None:
+                    print(f"[WARN] RoboGauge returned empty results for task {task_id} at step {step}.")
+                    continue
+                scores = results.get('scores')
+                if scores is None:
+                    print(f"[WARN] RoboGauge results for task {task_id} at step {step} do not contain 'scores'.")
+                    continue
                 if step == it:
                     result_received = True
                 for key, val in scores.items():
                     self.writer.add_scalar(f'RoboGauge/{key}', val, step)
                 results_path = os.path.join(results_dir, f'results_{step}.yaml')
                 with open(results_path, 'w', encoding='utf-8') as f:
-                    yaml.dump(resp['results'], f, allow_unicode=True, sort_keys=False)
+                    yaml.dump(results, f, allow_unicode=True, sort_keys=False)
             
             if last_model and result_received:
                 print(f"RoboGauge result for step {it} received. Exiting wait loop.")

@@ -1,7 +1,7 @@
 <div align="center">
 	<h1 align="center">Go2 RL GYM</h1>
 	<p align="center">
-		<span>🌎 English</span> | <a href="README_zh.md">🇨🇳 中文</a>
+		<span>🌎 English</span> | <a href="README_zh.md">🇨🇳 中文</a> | <a href="https://arxiv.org/abs/2602.00678">📄 Paper</a>
 	</p>
 </div>
 
