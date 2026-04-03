@@ -146,7 +146,7 @@ class GO2Cfg(LeggedRobotCfg):
             'heading': [-1.57, 1.57], # min max [rad]
         }, { # list for command range curriculums at specific training iterations
             'iter': 40000, # training iteration at which the command ranges are updated
-            'lin_vel_x': [-2.0, 4.2], # min max [m/s]
+            'lin_vel_x': [-2.0, 4.5], # min max [m/s]
             'lin_vel_y': [-0.5, 0.5], # min max [m/s]
             'ang_vel_yaw': [-1.0, 1.0], # min max [rad/s]
             'heading': [-1.57, 1.57], # min max [rad]
@@ -181,7 +181,7 @@ class GO2Cfg(LeggedRobotCfg):
         foot_name = "foot"
         penalize_contacts_on = ["thigh", "calf"]
         terminate_after_contacts_on = ["base"]
-        self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
+        self_collisions = 0 # 1 to disable, 0 to enable...bitwise filter
   
     class rewards(LeggedRobotCfg.rewards):
         soft_dof_pos_limit = 0.9
