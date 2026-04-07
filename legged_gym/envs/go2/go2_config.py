@@ -96,8 +96,6 @@ class GO2Cfg(LeggedRobotCfg):
         move_down_by_accumulated_xy_command = True # move down the terrain curriculum based on accumulated xy command distance instead of absolute distance
         
     class commands(LeggedRobotCfg.commands):
-        curriculum = False
-        max_curriculum = 1.
         num_commands = 4 # default: lin_vel_x, lin_vel_y, ang_vel_yaw (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 5. # time before command are changed[s]
         heading_command = False # if true: compute ang vel command from heading error
@@ -151,7 +149,7 @@ class GO2Cfg(LeggedRobotCfg):
         foot_name = "foot"
         penalize_contacts_on = ["thigh", "calf"]
         terminate_after_contacts_on = ["base"]
-        self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
+        self_collisions = 0 # 1 to disable, 0 to enable...bitwise filter
   
     class rewards(LeggedRobotCfg.rewards):
         soft_dof_pos_limit = 0.9

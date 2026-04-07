@@ -28,7 +28,7 @@
 运行以下命令进行训练：
 
 ```bash
-python legged_gym/scripts/train.py --task=xxx
+python legged_gym/scripts/train.py --task=xxx --headless
 ```
 
 #### ⚙️  参数说明
@@ -59,14 +59,15 @@ python legged_gym/scripts/train.py --task=xxx
 
 | Model | Score | Tracking | Safety | Quality | Level | Download |
 | --- | --- | --- | --- | --- | --- | --- |
-| go2_moe_cts (Ours) | **0.6739** | **0.6647** | **0.7776** | **0.7739** | **7.85** | [ckpt](https://drive.google.com/drive/folders/1aoXUxw-pGK1MbyzQ4IJzlA_tW8zrWP3Y?usp=drive_link) |
-| go2_ac_moe_cts | 0.6541 | 0.6425 | 0.7558 | 0.7504 | 7.52 | [ckpt](https://drive.google.com/file/d/1CDLsaR4XR3oG09ZHQ5u3lrJLfwyH2jz2/view?usp=drive_link) |
-| go2_moe_ng_cts | 0.6537 | 0.6423 | 0.7554 | 0.7525 | 7.56 | [ckpt](https://drive.google.com/drive/folders/1Rr89ZS0QJT-o-5LXsNqCWJdLGweqmN4Q?usp=drive_link) |
-| go2_mcp_cts | 0.6423 | 0.6323 | 0.7464 | 0.7412 | 7.41 | [ckpt](https://drive.google.com/drive/folders/1fd9cDVhV1dY6hcxuSZq2mcvFUp6V5Zfl?usp=drive_link) |
-| [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5401 | 0.5389 | 0.6412 | 0.6391 | 6.19 | [ckpt](https://drive.google.com/file/d/1remJbGoTorqnArsz8Z1ewY4TVobss4Fb/view?usp=drive_link) |
-| [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.5032 | 0.5010 | 0.6085 | 0.6032 | 5.74 | [ckpt](https://drive.google.com/file/d/19BEBeiQqjHcPgGrN3AX6D7Yefs_8eswL/view?usp=drive_link) |
+| go2_moe_cts (Ours) | **0.6713** | **0.6669** | **0.7857** | **0.7392** | **7.85** | [ckpt](https://drive.google.com/drive/folders/1aoXUxw-pGK1MbyzQ4IJzlA_tW8zrWP3Y?usp=drive_link) |
+| go2_ac_moe_cts | 0.6509 | 0.6442 | 0.7644 | 0.7149 | 7.52 | [ckpt](https://drive.google.com/file/d/1CDLsaR4XR3oG09ZHQ5u3lrJLfwyH2jz2/view?usp=drive_link) |
+| go2_mcp_cts | 0.6399 | 0.6355 | 0.7542 | 0.7058 | 7.41 | [ckpt](https://drive.google.com/drive/folders/1fd9cDVhV1dY6hcxuSZq2mcvFUp6V5Zfl?usp=drive_link) |
+| go2_moe_ng_cts | 0.6519 | 0.6447 | 0.7639 | 0.7186 | 7.56 | [ckpt](https://drive.google.com/drive/folders/1Rr89ZS0QJT-o-5LXsNqCWJdLGweqmN4Q?usp=drive_link) |
+| [CTS](https://arxiv.org/pdf/2405.10830) vanilla | 0.5786 | 0.5755 | 0.7066 | 0.6624 | 6.83 | [ckpt]() |
+| [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5379 | 0.5453 | 0.6476 | 0.6050 | 6.19 | [ckpt](https://drive.google.com/file/d/1remJbGoTorqnArsz8Z1ewY4TVobss4Fb/view?usp=drive_link) |
+| [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.5054 | 0.5105 | 0.6149 | 0.5730 | 5.74 | [ckpt](https://drive.google.com/file/d/19BEBeiQqjHcPgGrN3AX6D7Yefs_8eswL/view?usp=drive_link) |
 
-> 下载的ckpt中*.pt用于[py部署](#41-python实物部署)，*.onnx用于[cpp部署](#42-c实物部署)
+> 下载的 ckpt 中，`*.pt` 用于[Python 实物部署](#41-python实物部署)，`*.onnx` 用于[C++ 实物部署](#42-c实物部署)。上述模型均在关闭自碰撞的设置下训练；后续测试发现，开启自碰撞也能取得不错效果，参考 [go2_moe_cts_self_0.6669 - ckpt](https://drive.google.com/drive/folders/1znytqHNtDiZM5J4vaBd-EuM81l91D6s5?usp=drive_link)。
 
 ---
 
@@ -82,9 +83,9 @@ python legged_gym/scripts/play.py --task=xxx
 
 - Play 启动参数为随机地形，难度在7到9之间。
 - 默认加载实验文件夹最新训练的一个模型。
-- 可通过 `experiment_name` 和 `checkpoint` 指定其他模型，例如
+- 可通过 `experiment_name`, `load_run` 和 `checkpoint` 指定其他模型，例如
     ```bash
-    python legged_gym/scripts/play.py --task=go2_cts --num_envs 100 --experiment_name go2_cts_hard_terrain --checkpoint 100000
+    python legged_gym/scripts/play.py --task=go2_moe_cts --num_envs 100 --experiment_name go2_cts_hard_terrain --load_run Mar21_22-54-5-46_ --checkpoint 100000
     ```
 
 #### 💾 导出网络
@@ -196,4 +197,3 @@ python deploy_real_go2.py eth0
 新增内容根据 [MIT License](./LICENSE) 授权，原仓库unitree_rl_gym根据 [BSD 3-Clause License](./LICENSE) 授权。
 
 详情请阅读完整 [LICENSE 文件](./LICENSE)。
-

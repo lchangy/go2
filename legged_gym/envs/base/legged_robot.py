@@ -129,6 +129,9 @@ class LeggedRobot(BaseTask):
         # compute observations, rewards, resets, ...
         self.check_termination()
         self.compute_reward()
+        # resample commands must after reward computing
+        resampling_env_ids = ((self.commands_resampling_step <= 0.0) * (self.episode_length_buf < self.max_episode_length - 1)).nonzero(as_tuple=False).flatten()
+        self._resample_commands(resampling_env_ids)
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset_idx(env_ids)
         
@@ -137,6 +140,7 @@ class LeggedRobot(BaseTask):
 
         self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
 
+        self.last_last_actions[:] = self.last_actions[:]
         self.last_actions[:] = self.actions[:]
         self.last_dof_vel[:] = self.dof_vel[:]
         self.last_root_vel[:] = self.root_states[:, 7:13]
@@ -180,7 +184,7 @@ class LeggedRobot(BaseTask):
     def reset_idx(self, env_ids):
         """ Reset some environments.
             Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
-            [Optional] calls self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids) and
+            [Optional] calls self._update_terrain_curriculum(env_ids),
             Logs episode info
             Resets some buffers
 
@@ -216,14 +220,13 @@ class LeggedRobot(BaseTask):
         # reset buffers
         self.actions[env_ids] = 0.
         self.last_actions[env_ids] = 0.
+        self.last_last_actions[env_ids] = 0.
         self.last_dof_vel[env_ids] = 0.
         self.feet_air_time[env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
         self.commands_resampling_step[env_ids] = self.cfg.commands.resampling_time / self.dt
         self.commands_xy_accumulation[env_ids] = 0.0
-        if self.cfg.commands.curriculum:
-            self.update_command_curriculum(env_ids)
         self._resample_commands(env_ids)
         # fill extras
         self.extras["episode"] = {}
@@ -238,8 +241,7 @@ class LeggedRobot(BaseTask):
         for key in self.episode_sums.keys():
             self.extras["episode"]['rew_' + key] = torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
             self.episode_sums[key][env_ids] = 0.
-        if self.cfg.commands.curriculum:
-            self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]
+        self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]
         # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf
@@ -403,20 +405,8 @@ class LeggedRobot(BaseTask):
     
     def _post_physics_step_callback(self):
         """ Callback called before computing terminations, rewards, and observations
-            Default behaviour: Compute ang vel command based on target and heading, compute measured terrain heights and randomly push robots
+            Default behaviour: Compute measured terrain heights and randomly push robots
         """
-        # env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0).nonzero(as_tuple=False).flatten()
-        resampling_env_ids = ((self.commands_resampling_step <= 0.0) * (self.episode_length_buf < self.max_episode_length - 1)).nonzero(as_tuple=False).flatten()
-        self._resample_commands(resampling_env_ids)
-        if self.cfg.commands.heading_command:
-            mask = (self.stop_heading == 0.0)
-            forward = quat_apply(self.base_quat[mask], self.forward_vec[mask])
-            heading = torch.atan2(forward[:, 1], forward[:, 0])
-            self.commands[mask, 2] = torch.clip(
-                0.5*wrap_to_pi(self.commands[mask, 3] - heading),
-                self.env_command_ranges["ang_vel_yaw"][:, 0],
-                self.env_command_ranges["ang_vel_yaw"][:, 1]
-            )
         if self.cfg.terrain.measure_heights:
             self.measured_heights = self._get_heights()
 
@@ -591,6 +581,17 @@ class LeggedRobot(BaseTask):
 
         self.commands_xy_accumulation[env_ids] += self.commands[env_ids, :2]
 
+        if self.cfg.commands.heading_command:
+            heading_env_ids = env_ids[self.stop_heading[env_ids] == 0.0]
+            if len(heading_env_ids) > 0:
+                forward = quat_apply(self.base_quat[heading_env_ids], self.forward_vec[heading_env_ids])
+                heading = torch.atan2(forward[:, 1], forward[:, 0])
+                self.commands[heading_env_ids, 2] = torch.clip(
+                    0.5 * wrap_to_pi(self.commands[heading_env_ids, 3] - heading),
+                    self.env_command_ranges["ang_vel_yaw"][heading_env_ids, 0],
+                    self.env_command_ranges["ang_vel_yaw"][heading_env_ids, 1]
+            )
+
     def _compute_torques(self, actions):
         """ Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
@@ -722,21 +723,7 @@ class LeggedRobot(BaseTask):
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                     gymtorch.unwrap_tensor(self.root_states),
                                                     gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-
    
-    
-    def update_command_curriculum(self, env_ids):
-        """ Implements a curriculum of increasing commands
-
-        Args:
-            env_ids (List[int]): ids of environments being reset
-        """
-        # If the tracking reward is above 80% of the maximum, increase the range of commands
-        if torch.mean(self.episode_sums["tracking_lin_vel"][env_ids]) / self.max_episode_length > 0.8 * self.reward_scales["tracking_lin_vel"]:
-            self.command_ranges["lin_vel_x"][0] = np.clip(self.command_ranges["lin_vel_x"][0] - 0.5, -self.cfg.commands.max_curriculum, 0.)
-            self.command_ranges["lin_vel_x"][1] = np.clip(self.command_ranges["lin_vel_x"][1] + 0.5, 0., self.cfg.commands.max_curriculum)
-
-
     def _get_noise_scale_vec(self, cfg):
         """ Sets a vector used to scale the noise added to the observations.
             [NOTE]: Must be adapted when changing the observations structure
@@ -807,6 +794,7 @@ class LeggedRobot(BaseTask):
         self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_dof_vel = torch.zeros_like(self.dof_vel)
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
         self.commands = torch.zeros(self.num_envs, self.cfg.commands.num_commands, dtype=torch.float, device=self.device, requires_grad=False) # x vel, y vel, yaw vel, heading
@@ -1372,10 +1360,7 @@ class LeggedRobot(BaseTask):
 
     def _reward_action_smoothness(self):
         # a_t - 2a_{t-1} + a_{t-2}
-        if not hasattr(self, 'last_last_actions'):
-            self.last_last_actions = torch.zeros_like(self.last_actions)
         rew = torch.sum((self.actions - 2 * self.last_actions + self.last_last_actions).pow(2), dim=1)
-        self.last_last_actions[:] = self.last_actions[:]
         return rew
     
     def _reward_dof_power(self):

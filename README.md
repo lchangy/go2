@@ -28,7 +28,7 @@ Follow the step-by-step setup guide in [setup.md](doc/setup_en.md).
 Run the following command to launch training:
 
 ```bash
-python legged_gym/scripts/train.py --task=xxx
+python legged_gym/scripts/train.py --task=xxx --headless
 ```
 
 #### ⚙️  Arguments
@@ -59,14 +59,15 @@ The trained model above was evaluated using the [RoboGauge](https://github.com/w
 
 | Model | Score | Tracking  | Safety  | Quality  | Level | Download |
 | --- | --- | --- | --- | --- | --- | --- |
-| go2_moe_cts | **0.6819** | **0.6714** | **0.7794** | **0.7748** | **7.85** | [ckpt](https://drive.google.com/drive/folders/1aoXUxw-pGK1MbyzQ4IJzlA_tW8zrWP3Y?usp=drive_link) |
-| go2_moe_ng_cts | 0.6670 | 0.6552 | 0.7651 | 0.7613 | 7.67 | [ckpt](https://drive.google.com/drive/folders/1Rr89ZS0QJT-o-5LXsNqCWJdLGweqmN4Q?usp=drive_link) |
-| go2_ac_moe_cts | 0.6652 | 0.6527 | 0.7615 | 0.7552 | 7.57 | [ckpt](https://drive.google.com/file/d/1CDLsaR4XR3oG09ZHQ5u3lrJLfwyH2jz2/view?usp=drive_link) |
-| go2_mcp_cts | 0.6545 | 0.6440 | 0.7531 | 0.7476 | 7.48 | [ckpt](https://drive.google.com/drive/folders/1fd9cDVhV1dY6hcxuSZq2mcvFUp6V5Zfl?usp=drive_link) |
-| [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5209 | 0.5200 | 0.6200 | 0.6100 | 5.78 | [ckpt](https://drive.google.com/file/d/1remJbGoTorqnArsz8Z1ewY4TVobss4Fb/view?usp=drive_link) |
-| [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.4832 | 0.4800 | 0.5800 | 0.5700 | 5.26 | [ckpt](https://drive.google.com/file/d/19BEBeiQqjHcPgGrN3AX6D7Yefs_8eswL/view?usp=drive_link) |
+| go2_moe_cts (Ours) | **0.6713** | **0.6669** | **0.7857** | **0.7392** | **7.85** | [ckpt](https://drive.google.com/drive/folders/1aoXUxw-pGK1MbyzQ4IJzlA_tW8zrWP3Y?usp=drive_link) |
+| go2_ac_moe_cts | 0.6509 | 0.6442 | 0.7644 | 0.7149 | 7.52 | [ckpt](https://drive.google.com/file/d/1CDLsaR4XR3oG09ZHQ5u3lrJLfwyH2jz2/view?usp=drive_link) |
+| go2_mcp_cts | 0.6399 | 0.6355 | 0.7542 | 0.7058 | 7.41 | [ckpt](https://drive.google.com/drive/folders/1fd9cDVhV1dY6hcxuSZq2mcvFUp6V5Zfl?usp=drive_link) |
+| go2_moe_ng_cts | 0.6519 | 0.6447 | 0.7639 | 0.7186 | 7.56 | [ckpt](https://drive.google.com/drive/folders/1Rr89ZS0QJT-o-5LXsNqCWJdLGweqmN4Q?usp=drive_link) |
+| [CTS](https://arxiv.org/pdf/2405.10830) vanilla | 0.5786 | 0.5755 | 0.7066 | 0.6624 | 6.83 | [ckpt]() |
+| [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5379 | 0.5453 | 0.6476 | 0.6050 | 6.19 | [ckpt](https://drive.google.com/file/d/1remJbGoTorqnArsz8Z1ewY4TVobss4Fb/view?usp=drive_link) |
+| [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.5054 | 0.5105 | 0.6149 | 0.5730 | 5.74 | [ckpt](https://drive.google.com/file/d/19BEBeiQqjHcPgGrN3AX6D7Yefs_8eswL/view?usp=drive_link) |
 
-> In the downloaded ckpt, *.pt files are used for [Python deployment](#41-python-deployment), and *.onnx files are used for [C++ deployment](#42-c-deployment).
+> In the downloaded ckpt files, `*.pt` is used for [Python deployment](#41-python-deployment), and `*.onnx` is used for [C++ deployment](#42-c-deployment). The models above were all trained with self-collision disabled. In later tests, we found that enabling self-collision can also achieve strong results; see [go2_moe_cts_self_0.6669 - ckpt](https://drive.google.com/drive/folders/1znytqHNtDiZM5J4vaBd-EuM81l91D6s5?usp=drive_link).
 
 ### 2. Play
 
@@ -80,9 +81,9 @@ python legged_gym/scripts/play.py --task=xxx
 
 - Play launches on randomized terrain with difficulty between 7 and 9.
 - It automatically loads the latest checkpoint inside the experiment folder.
-- Override via `experiment_name` and `checkpoint`, for example:
+- You can specify another model via `experiment_name`, `load_run`, and `checkpoint`, for example:
 	```bash
-	python legged_gym/scripts/play.py --task=go2_cts --num_envs 100 --experiment_name go2_cts_hard_terrain --checkpoint 100000
+	python legged_gym/scripts/play.py --task=go2_moe_cts --num_envs 100 --experiment_name go2_cts_hard_terrain --load_run Mar21_22-54-5-46_ --checkpoint 100000
 	```
 
 #### 💾 Policy Export
