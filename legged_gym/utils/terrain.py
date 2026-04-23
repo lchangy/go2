@@ -46,7 +46,7 @@ class Terrain:
             self.vertices, self.triangles = terrain_utils.convert_heightfield_to_trimesh(   self.height_field_raw,
                                                                                             self.cfg.horizontal_scale,
                                                                                             self.cfg.vertical_scale,
-                                                                                            self.cfg.slope_treshold)
+                                                                                            self.cfg.slope_threshold)
     
     def randomized_terrain(self):
         for k in range(self.cfg.num_sub_terrains):

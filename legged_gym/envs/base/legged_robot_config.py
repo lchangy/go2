@@ -37,7 +37,7 @@ class LeggedRobotCfg(BaseConfig):
         # [wave, slope, rough slope, stairs up, stairs down, obstacles, stepping stones, gap, flat]
         terrain_proportions = [0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1, 0.1, 0.0]
         # trimesh only:
-        slope_treshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
+        slope_threshold = 0.75 # slopes above this threshold will be corrected to vertical surfaces
         move_down_by_accumulated_xy_command = False # move down the terrain curriculum based on accumulated xy command distance instead of absolute distance
 
     class commands:

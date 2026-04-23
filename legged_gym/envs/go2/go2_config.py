@@ -93,6 +93,7 @@ class GO2Cfg(LeggedRobotCfg):
         # terrain_proportions = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
         # terrain_proportions = [0.3, 0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1]
         # terrain_proportions = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        slope_threshold = 1.5  # higher value means more steep slopes, for better wave and rough slope generation
         move_down_by_accumulated_xy_command = True # move down the terrain curriculum based on accumulated xy command distance instead of absolute distance
         
     class commands(LeggedRobotCfg.commands):

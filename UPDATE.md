@@ -1,3 +1,6 @@
+# 20260419
+## v1.0.4
+1. 地形中`slope_threshold: 0.75 -> 1.5`，wave和rough_slope表现更好
 # 20260403
 ## v1.0.3
 1. 修复last_last_action重置问题，修复resample_command在计算奖励前的问题

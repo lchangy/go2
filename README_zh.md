@@ -67,7 +67,7 @@ python legged_gym/scripts/train.py --task=xxx --headless
 | [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5379 | 0.5453 | 0.6476 | 0.6050 | 6.19 | [ckpt](https://drive.google.com/file/d/1remJbGoTorqnArsz8Z1ewY4TVobss4Fb/view?usp=drive_link) |
 | [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.5054 | 0.5105 | 0.6149 | 0.5730 | 5.74 | [ckpt](https://drive.google.com/file/d/19BEBeiQqjHcPgGrN3AX6D7Yefs_8eswL/view?usp=drive_link) |
 
-> 下载的 ckpt 中，`*.pt` 用于[Python 实物部署](#41-python实物部署)，`*.onnx` 用于[C++ 实物部署](#42-c实物部署)。上述模型均在关闭自碰撞的设置下训练；后续测试发现，开启自碰撞也能取得不错效果，参考 [go2_moe_cts_self_0.6669 - ckpt](https://drive.google.com/drive/folders/1znytqHNtDiZM5J4vaBd-EuM81l91D6s5?usp=drive_link)。
+> 下载的 ckpt 中，`*.pt` 用于[Python 实物部署](#41-python实物部署)，`*.onnx` 用于[C++ 实物部署](#42-c实物部署)。上述模型均在关闭自碰撞的设置下训练；后续测试发现，开启自碰撞也能取得不错效果，参考 [go2_moe_cts_164k_0.6715 - exported](https://drive.google.com/drive/folders/1w8ctwb77PE7wDnlC-XYY1CSh39e4IQmT?usp=drive_link)以及其[完整模型权重 - model_164000.pt](https://drive.google.com/file/d/1mwQywpM6UpzZWzHOD_MMxWqgFKLr5UZw/view?usp=drive_link)。
 
 ---
 
