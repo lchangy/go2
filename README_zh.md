@@ -55,19 +55,20 @@ python legged_gym/scripts/train.py --task=xxx --headless
 
 #### 模型评估
 
-使用[RoboGauge](https://github.com/wty-yy/RoboGauge)框架通过Sim2Sim评估上述训练模型，下表中模型为150k训练步中的最优模型
+使用[RoboGauge](https://github.com/wty-yy/RoboGauge)框架通过Sim2Sim评估上述训练模型，下表中模型为150k训练步中的最优模型。
+发布的权重统一保存在 Hugging Face: [wty-yy/go2_rl_gym_data](https://huggingface.co/wty-yy/go2_rl_gym_data)。
 
 | Model | Score | Tracking | Safety | Quality | Level | Download |
 | --- | --- | --- | --- | --- | --- | --- |
-| go2_moe_cts (Ours) | **0.6713** | **0.6669** | **0.7857** | **0.7392** | **7.85** | [ckpt](https://drive.google.com/drive/folders/1aoXUxw-pGK1MbyzQ4IJzlA_tW8zrWP3Y?usp=drive_link) |
-| go2_ac_moe_cts | 0.6509 | 0.6442 | 0.7644 | 0.7149 | 7.52 | [ckpt](https://drive.google.com/file/d/1CDLsaR4XR3oG09ZHQ5u3lrJLfwyH2jz2/view?usp=drive_link) |
-| go2_mcp_cts | 0.6399 | 0.6355 | 0.7542 | 0.7058 | 7.41 | [ckpt](https://drive.google.com/drive/folders/1fd9cDVhV1dY6hcxuSZq2mcvFUp6V5Zfl?usp=drive_link) |
-| go2_moe_ng_cts | 0.6519 | 0.6447 | 0.7639 | 0.7186 | 7.56 | [ckpt](https://drive.google.com/drive/folders/1Rr89ZS0QJT-o-5LXsNqCWJdLGweqmN4Q?usp=drive_link) |
-| [CTS](https://arxiv.org/pdf/2405.10830) vanilla | 0.5786 | 0.5755 | 0.7066 | 0.6624 | 6.83 | [ckpt]() |
-| [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5379 | 0.5453 | 0.6476 | 0.6050 | 6.19 | [ckpt](https://drive.google.com/file/d/1remJbGoTorqnArsz8Z1ewY4TVobss4Fb/view?usp=drive_link) |
-| [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.5054 | 0.5105 | 0.6149 | 0.5730 | 5.74 | [ckpt](https://drive.google.com/file/d/19BEBeiQqjHcPgGrN3AX6D7Yefs_8eswL/view?usp=drive_link) |
+| go2_moe_cts (Ours) | **0.6713** | **0.6669** | **0.7857** | **0.7392** | **7.85** | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/tree/main/go2_moe_cts_137000_0.6713) |
+| go2_ac_moe_cts | 0.6509 | 0.6442 | 0.7644 | 0.7149 | 7.52 | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/blob/main/go2_ac_moe_cts_115k_0.6509.pt) |
+| go2_mcp_cts | 0.6399 | 0.6355 | 0.7542 | 0.7058 | 7.41 | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/tree/main/go2_mcp_cts_91k_0.6399) |
+| go2_moe_ng_cts | 0.6519 | 0.6447 | 0.7639 | 0.7186 | 7.56 | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/tree/main/go2_moe_ng_cts_79k_0.6519) |
+| [CTS](https://arxiv.org/pdf/2405.10830) vanilla | 0.5786 | 0.5755 | 0.7066 | 0.6624 | 6.83 | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/tree/main/go2_cts_vanilla2_103.5k_0.5786) |
+| [HIM](https://github.com/InternRobotics/HIMLoco) | 0.5379 | 0.5453 | 0.6476 | 0.6050 | 6.19 | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/blob/main/go2_him_21k_0.5379.pt) |
+| [DreamWaQ](https://arxiv.org/abs/2301.10602) | 0.5054 | 0.5105 | 0.6149 | 0.5730 | 5.74 | [ckpt](https://huggingface.co/wty-yy/go2_rl_gym_data/blob/main/go2_dwaq_119.5k_0.5054.pt) |
 
-> 下载的 ckpt 中，`*.pt` 用于[Python 实物部署](#41-python实物部署)，`*.onnx` 用于[C++ 实物部署](#42-c实物部署)。上述模型均在关闭自碰撞的设置下训练；后续测试发现，开启自碰撞也能取得不错效果，参考 [go2_moe_cts_164k_0.6715 - exported](https://drive.google.com/drive/folders/1w8ctwb77PE7wDnlC-XYY1CSh39e4IQmT?usp=drive_link)以及其[完整模型权重 - model_164000.pt](https://drive.google.com/file/d/1mwQywpM6UpzZWzHOD_MMxWqgFKLr5UZw/view?usp=drive_link)。
+> 下载的 ckpt 中，`*.pt` 用于[Python 实物部署](#41-python实物部署)，`*.onnx` 用于[C++ 实物部署](#42-c实物部署)。上述模型均在关闭自碰撞的设置下训练；后续测试发现，开启自碰撞也能取得不错效果，参考 [go2_moe_cts_164k_0.6715 - exported](https://huggingface.co/wty-yy/go2_rl_gym_data/tree/main/go2_moe_cts_high_slope_thre_164k_0.6715_20260419)以及其[完整模型权重 - model_164000.pt](https://huggingface.co/wty-yy/go2_rl_gym_data/blob/main/go2_moe_cts_high_slope_thre_164k_0.6715_20260419/model_164000.pt)。
 
 ---
 
