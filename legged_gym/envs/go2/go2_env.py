@@ -46,6 +46,12 @@ class Go2Robot(LeggedRobot):
             (self.last_dof_vel - self.dof_vel) / self.dt * 1e-4,  # motor accelerations (12,)
             heights,  # height measurements (187,)
         ]
+        if getattr(self.cfg.env, "privileged_include_body_contact_bits", False):
+            threshold = getattr(self.cfg.env, "privileged_body_contact_threshold", 1.0)
+            body_contact_bits = (
+                torch.norm(self.contact_forces[:, self.privileged_body_contact_indices, :], dim=-1) > threshold
+            ).float()
+            privileged_obs_parts.append(body_contact_bits)  # base + thigh/calf contact bits (9,)
         if getattr(self.cfg.env, "privileged_include_payload", False):
             privileged_obs_parts.append(self.payload_masses)  # payload mass offset (1,)
         if getattr(self.cfg.env, "privileged_include_base_com", False):

@@ -263,12 +263,21 @@ class OnPolicyRunnerCTS:
         term_sums = locs.get('rollout_reward_term_sums', {})
         term_abs_sums = locs.get('rollout_reward_term_abs_sums', {})
         term_counts = locs.get('rollout_reward_term_counts', {})
+        reward_log_scale = 1.0 / max(getattr(self.env, "dt", 1.0), 1e-8)
         for reward_name in sorted(term_sums.keys()):
             count = term_counts.get(reward_name, 0)
             if count == 0:
                 continue
-            self.writer.add_scalar(f'RewardTerms/{reward_name}_mean', term_sums[reward_name] / count, locs['it'])
-            self.writer.add_scalar(f'RewardTerms/{reward_name}_abs_mean', term_abs_sums[reward_name] / count, locs['it'])
+            self.writer.add_scalar(
+                f'RewardTermsFinal/{reward_name}_mean',
+                term_sums[reward_name] / count * reward_log_scale,
+                locs['it'],
+            )
+            self.writer.add_scalar(
+                f'RewardTermsFinal/{reward_name}_abs_mean',
+                term_abs_sums[reward_name] / count * reward_log_scale,
+                locs['it'],
+            )
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         # initialize writer
@@ -337,7 +346,7 @@ class OnPolicyRunnerCTS:
                     rollout_teacher_reward_count += ti.numel()
                     rollout_student_reward_sum += reward_values[si].sum().item()
                     rollout_student_reward_count += si.numel()
-                    for reward_name, term_values in getattr(self.env, "last_reward_terms", {}).items():
+                    for reward_name, term_values in getattr(self.env, "last_final_reward_terms", {}).items():
                         term_values = term_values.detach().float()
                         rollout_reward_term_sums[reward_name] = rollout_reward_term_sums.get(reward_name, 0.0) + term_values.sum().item()
                         rollout_reward_term_abs_sums[reward_name] = rollout_reward_term_abs_sums.get(reward_name, 0.0) + term_values.abs().sum().item()

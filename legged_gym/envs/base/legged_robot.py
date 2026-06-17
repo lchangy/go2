@@ -365,6 +365,7 @@ class LeggedRobot(BaseTask):
         self.rew_buf[:] = 0.
         self.last_reward_terms = {}
         self.last_raw_reward_terms = {}
+        self.last_final_reward_terms = {}
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             raw_rew = self.reward_functions[i]()
@@ -382,6 +383,7 @@ class LeggedRobot(BaseTask):
             self.episode_sums[name] += rew
             self.last_raw_reward_terms[name] = raw_rew.detach()
             self.last_reward_terms[name] = rew.detach()
+            self.last_final_reward_terms[name] = rew.detach()
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         # add termination reward after clipping
@@ -392,6 +394,7 @@ class LeggedRobot(BaseTask):
             self.episode_sums["termination"] += rew
             self.last_raw_reward_terms["termination"] = raw_rew.detach()
             self.last_reward_terms["termination"] = rew.detach()
+            self.last_final_reward_terms["termination"] = rew.detach()
 
     def update_episode_tracking_metrics(self):
         """Accumulate complete-episode velocity tracking diagnostics."""
@@ -1206,6 +1209,7 @@ class LeggedRobot(BaseTask):
 
         # save body names from the asset
         body_names = self.gym.get_asset_rigid_body_names(self.robot_asset)
+        self.body_names = body_names
         self.dof_names = self.gym.get_asset_dof_names(self.robot_asset)
         self.num_bodies = len(body_names)
         self.num_dofs = len(self.dof_names)
@@ -1271,6 +1275,25 @@ class LeggedRobot(BaseTask):
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
+
+        self.privileged_body_contact_indices = torch.empty(0, dtype=torch.long, device=self.device, requires_grad=False)
+        if getattr(self.cfg.env, "privileged_include_body_contact_bits", False):
+            contact_names = []
+            for name in body_names:
+                lower_name = name.lower()
+                if "base" in lower_name or "thigh" in lower_name or "calf" in lower_name:
+                    contact_names.append(name)
+            self.privileged_body_contact_indices = torch.zeros(
+                len(contact_names), dtype=torch.long, device=self.device, requires_grad=False
+            )
+            for i, name in enumerate(contact_names):
+                self.privileged_body_contact_indices[i] = self.gym.find_actor_rigid_body_handle(
+                    self.envs[0], self.actor_handles[0], name
+                )
+            expected_dim = getattr(self.cfg.env, "privileged_body_contact_bits_dim", len(contact_names))
+            assert len(contact_names) == expected_dim, (
+                f"Expected {expected_dim} privileged body contact bits, got {len(contact_names)}: {contact_names}"
+            )
 
     def _get_env_origins(self):
         """ Sets environment origins. On rough terrain the origins are defined by the terrain platforms.

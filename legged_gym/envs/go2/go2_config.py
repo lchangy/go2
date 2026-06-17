@@ -22,6 +22,8 @@ GO2_STRICT_BASELINE_ABLATION = True
 GO2_PRIVILEGED_INCLUDE_PAYLOAD = False
 GO2_PRIVILEGED_INCLUDE_BASE_COM = False
 GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH = False
+GO2_PRIVILEGED_INCLUDE_BODY_CONTACT_BITS = _env_bool("GO2_PRIVILEGED_INCLUDE_BODY_CONTACT_BITS", False)
+GO2_PRIVILEGED_BODY_CONTACT_BITS_DIM = 9  # base + thigh/calf contact bits
 GO2_DOMAIN_USE_ENHANCED_PAYLOAD_RANGE = False
 GO2_DOMAIN_USE_PAYLOAD_CURRICULUM = False
 GO2_DOMAIN_USE_ENHANCED_BASE_COM_RANGE = False
@@ -56,6 +58,7 @@ GO2_PRIVILEGED_EXTRA_DIM = (
     (1 if GO2_PRIVILEGED_INCLUDE_PAYLOAD else 0)
     + (3 if GO2_PRIVILEGED_INCLUDE_BASE_COM else 0)
     + (6 if GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH else 0)
+    + (GO2_PRIVILEGED_BODY_CONTACT_BITS_DIM if GO2_PRIVILEGED_INCLUDE_BODY_CONTACT_BITS else 0)
 )
 
 class GO2Cfg(LeggedRobotCfg):
@@ -64,6 +67,7 @@ class GO2Cfg(LeggedRobotCfg):
         privileged_include_payload = GO2_PRIVILEGED_INCLUDE_PAYLOAD
         privileged_include_base_com = GO2_PRIVILEGED_INCLUDE_BASE_COM
         privileged_include_external_wrench = GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH
+        privileged_include_body_contact_bits = GO2_PRIVILEGED_INCLUDE_BODY_CONTACT_BITS
         domain_use_enhanced_payload_range = GO2_DOMAIN_USE_ENHANCED_PAYLOAD_RANGE
         domain_use_payload_curriculum = GO2_DOMAIN_USE_PAYLOAD_CURRICULUM
         domain_use_enhanced_base_com_range = GO2_DOMAIN_USE_ENHANCED_BASE_COM_RANGE
@@ -101,11 +105,15 @@ class GO2Cfg(LeggedRobotCfg):
         num_envs = 8192
         num_observations = 45
         # proprioception(48) + foot contacts(4) + torques(12) + accelerations(12)
-        # + height_measurements(187) + optional payload_mass(1), base_com_offset(3), external_wrench(6)
+        # + height_measurements(187) + optional body_contact_bits(9), payload_mass(1),
+        # base_com_offset(3), external_wrench(6)
         num_privileged_obs = 45 + 3 + 4 + 12 + 12 + 187 + GO2_PRIVILEGED_EXTRA_DIM
         privileged_include_payload = GO2_PRIVILEGED_INCLUDE_PAYLOAD
         privileged_include_base_com = GO2_PRIVILEGED_INCLUDE_BASE_COM
         privileged_include_external_wrench = GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH
+        privileged_include_body_contact_bits = GO2_PRIVILEGED_INCLUDE_BODY_CONTACT_BITS
+        privileged_body_contact_bits_dim = GO2_PRIVILEGED_BODY_CONTACT_BITS_DIM
+        privileged_body_contact_threshold = 1.0
         # num_privileged_obs = 45 + 3 + 187  # 235
         # num_privileged_obs = 48  # without height measurements
         episode_length_s = 25
