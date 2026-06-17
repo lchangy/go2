@@ -273,11 +273,6 @@ class OnPolicyRunnerCTS:
                 term_sums[reward_name] / count * reward_log_scale,
                 locs['it'],
             )
-            self.writer.add_scalar(
-                f'RewardTermsFinal/{reward_name}_abs_mean',
-                term_abs_sums[reward_name] / count * reward_log_scale,
-                locs['it'],
-            )
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         # initialize writer
