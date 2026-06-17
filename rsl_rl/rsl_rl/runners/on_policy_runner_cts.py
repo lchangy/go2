@@ -229,6 +229,10 @@ class OnPolicyRunnerCTS:
             self.writer.add_scalar('SwAV/prototype_usage', metrics["stable_proto_usage"], it)
         if "stable_dynamic_corr" in metrics:
             self.writer.add_scalar('SwAV/stable_dynamic_corr', metrics["stable_dynamic_corr"], it)
+        film_prefix = "film_"
+        for key, value in metrics.items():
+            if key.startswith(film_prefix):
+                self.writer.add_scalar(f'FiLM/{key[len(film_prefix):]}', value, it)
 
     def _write_reward_metrics(self, locs):
         count = locs.get('rollout_reward_count', 0)

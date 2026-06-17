@@ -43,13 +43,40 @@ class StableFiLMActor(nn.Module):
             [nn.Linear(dims[i], dims[i + 1]) for i in range(len(hidden_dims))]
         )
         self.output_layer = nn.Linear(hidden_dims[-1], action_dim)
+        self.total_hidden_dim = sum(hidden_dims)
         self.film = nn.Linear(conditioning_dim, 2 * sum(hidden_dims))
         nn.init.zeros_(self.film.weight)
         nn.init.zeros_(self.film.bias)
 
-    def forward(self, x, conditioning):
+    def film_parameters(self, conditioning):
         film_params = self.film(conditioning)
-        gammas, betas = torch.split(film_params, sum(self.hidden_dims), dim=-1)
+        return torch.split(film_params, self.total_hidden_dim, dim=-1)
+
+    def forward_without_film(self, x):
+        h = x
+        for layer in self.hidden_layers:
+            h = self.activation(layer(h))
+        return self.output_layer(h)
+
+    def film_stats(self, conditioning):
+        gammas, betas = self.film_parameters(conditioning)
+        stats = {
+            "gamma_mean": gammas.mean().item(),
+            "gamma_abs_mean": gammas.abs().mean().item(),
+            "gamma_abs_max": gammas.abs().max().item(),
+            "beta_mean": betas.mean().item(),
+            "beta_abs_mean": betas.abs().mean().item(),
+            "beta_abs_max": betas.abs().max().item(),
+        }
+        offset = 0
+        for layer_id, hidden_dim in enumerate(self.hidden_dims):
+            stats[f"gamma_abs_mean_layer{layer_id}"] = gammas[:, offset:offset + hidden_dim].abs().mean().item()
+            stats[f"beta_abs_mean_layer{layer_id}"] = betas[:, offset:offset + hidden_dim].abs().mean().item()
+            offset += hidden_dim
+        return stats
+
+    def forward(self, x, conditioning):
+        gammas, betas = self.film_parameters(conditioning)
         offset = 0
         h = x
         for layer, hidden_dim in zip(self.hidden_layers, self.hidden_dims):
@@ -359,6 +386,42 @@ class ActorCriticMoECTS(nn.Module):
             return self.actor(dynamic_latent_and_obs, stable_latent)
         latent_and_obs = torch.cat([latent, obs], dim=1)
         return self.actor(latent_and_obs)
+
+    def actor_film_metrics(self, latent, obs):
+        if not self.use_actor_film:
+            return {}
+        stable_latent = latent[:, :self.stable_latent_dim].detach()
+        dynamic_latent = latent[:, self.stable_latent_dim:].detach()
+        dynamic_latent_and_obs = torch.cat([dynamic_latent, obs.detach()], dim=1)
+        film_action = self.actor(dynamic_latent_and_obs, stable_latent)
+        neutral_action = self.actor.forward_without_film(dynamic_latent_and_obs)
+        metrics = self.actor.film_stats(stable_latent)
+        action_delta = film_action - neutral_action
+        metrics.update({
+            "action_delta_mean": action_delta.abs().mean().item(),
+            "action_delta_max": action_delta.abs().max().item(),
+            "stable_z_abs_mean": stable_latent.abs().mean().item(),
+            "stable_z_std": stable_latent.std(unbiased=False).item(),
+        })
+        return metrics
+
+    def actor_film_grad_norm(self):
+        if not self.use_actor_film:
+            return 0.0
+        total_sq_norm = 0.0
+        for param in self.actor.film.parameters():
+            if param.grad is None:
+                continue
+            total_sq_norm += param.grad.detach().pow(2).sum().item()
+        return total_sq_norm ** 0.5
+
+    def actor_film_param_norm(self):
+        if not self.use_actor_film:
+            return 0.0
+        total_sq_norm = 0.0
+        for param in self.actor.film.parameters():
+            total_sq_norm += param.detach().pow(2).sum().item()
+        return total_sq_norm ** 0.5
 
     def update_distribution(self, latent, obs):
         mean = self.actor_forward(latent, obs)

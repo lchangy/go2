@@ -123,6 +123,10 @@ class MoECTS(CTS):
         mean_stable_proto_usage = 0.0
         mean_stable_dynamic_corr = 0.0
         stable_swav_update_count = 0
+        film_metrics = {}
+        film_metrics_recorded = False
+        mean_film_grad_norm = 0.0
+        film_grad_norm_count = 0
         priv_history_last_abs_error_sum = 0.0
         priv_history_last_abs_error_max = 0.0
         priv_history_last_abs_error_count = 0
@@ -228,6 +232,24 @@ class MoECTS(CTS):
             sigma_batch = results[3]
             entropy_batch = results[4]
 
+            if self.model.use_actor_film and not film_metrics_recorded:
+                with torch.no_grad():
+                    teacher_privileged_history = None
+                    if privileged_history_batch is not None:
+                        teacher_privileged_history = privileged_history_batch[:teacher_samples]
+                    teacher_latent = self.model.encode_teacher_latent(
+                        privileged_obs_batch[:teacher_samples],
+                        history=history_batch[:teacher_samples],
+                        privileged_history=teacher_privileged_history,
+                    )
+                    student_latent, _ = self.model.student_moe_encoder(
+                        history_batch[teacher_samples:teacher_samples + student_samples]
+                    )
+                    film_latent = torch.cat([teacher_latent, student_latent], dim=0)
+                    film_obs = obs_batch[:teacher_samples + student_samples]
+                    film_metrics = self.model.actor_film_metrics(film_latent, film_obs)
+                    film_metrics_recorded = True
+
             # KL
             if self.desired_kl != None and self.schedule == 'adaptive':
                 with torch.inference_mode():
@@ -286,6 +308,9 @@ class MoECTS(CTS):
             # Gradient step
             self.optimizer1.zero_grad()
             loss.backward()
+            if self.model.use_actor_film:
+                mean_film_grad_norm += self.model.actor_film_grad_norm()
+                film_grad_norm_count += 1
             params_to_clip = itertools.chain.from_iterable(g['params'] for g in self.optimizer1.param_groups)
             nn.utils.clip_grad_norm_(params_to_clip, self.max_grad_norm)
             self.optimizer1.step()
@@ -362,6 +387,8 @@ class MoECTS(CTS):
             mean_stable_proto_entropy /= stable_swav_update_count
             mean_stable_proto_usage /= stable_swav_update_count
             mean_stable_dynamic_corr /= stable_swav_update_count
+        if film_grad_norm_count > 0:
+            mean_film_grad_norm /= film_grad_norm_count
         self.tb_metrics = {
             "latent_l2": mean_latent_l2,
             "latent_cosine_similarity": mean_latent_cosine,
@@ -377,6 +404,13 @@ class MoECTS(CTS):
             "stable_proto_usage": mean_stable_proto_usage,
             "stable_dynamic_corr": mean_stable_dynamic_corr,
         }
+        if self.model.use_actor_film:
+            self.tb_metrics.update({
+                f"film_{key}": value
+                for key, value in film_metrics.items()
+            })
+            self.tb_metrics["film_grad_norm"] = mean_film_grad_norm
+            self.tb_metrics["film_param_norm"] = self.model.actor_film_param_norm()
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, mean_entropy_loss, mean_latent_loss, mean_load_balance_loss
