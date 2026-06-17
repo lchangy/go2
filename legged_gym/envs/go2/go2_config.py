@@ -32,8 +32,9 @@ class GO2Cfg(LeggedRobotCfg):
     class env(LeggedRobotCfg.env):
         num_envs = 8192
         num_observations = 45
-        # obs(45) + base_lin_vel(3) + height_measurements(187)
-        num_privileged_obs = 45 + 3 + 4 + 12 + 12 + 187  # 263
+        # proprioception(48) + foot contacts(4) + torques(12) + accelerations(12)
+        # + height_measurements(187) + payload_mass(1) + base_com_offset(3) + external_wrench(6)
+        num_privileged_obs = 45 + 3 + 4 + 12 + 12 + 187 + 1 + 3 + 6  # 273
         # num_privileged_obs = 45 + 3 + 187  # 235
         # num_privileged_obs = 48  # without height measurements
         episode_length_s = 25
@@ -44,13 +45,25 @@ class GO2Cfg(LeggedRobotCfg):
         friction_range = [0.0, 2.0]
 
         randomize_base_mass = True
-        added_mass_range = [-1., 1.]
+        added_mass_range = [0., 3.]
+        payload_mass_curriculum = {
+            'start_iter': 0,
+            'end_iter': 30000,
+            'start_range': [0.0, 0.5],
+            'end_range': [0.0, 3.0],
+        }
 
         randomize_link_mass = True
         multiplied_link_mass_range = [0.9, 1.1]
 
         randomize_base_com = True
-        added_base_com_range = [-0.03, 0.03]
+        added_base_com_range = [-0.06, 0.06]
+        base_com_curriculum = {
+            'start_iter': 0,
+            'end_iter': 30000,
+            'start_range': [-0.01, 0.01],
+            'end_range': [-0.06, 0.06],
+        }
 
         randomize_restitution = True # restitution to robot links (Robot init)
         restitution_range = [0.0, 0.5]
@@ -275,6 +288,20 @@ class GO2CfgDualMoECTS(LeggedRobotCfgDualMoECTS):
 class GO2CfgMoECTS(LeggedRobotCfgMoECTS):
     class policy(LeggedRobotCfgMoECTS.policy):
         expert_num = 8  # number of experts in the student model
+        privileged_height_start = 76
+        privileged_height_dim = 187
+        privileged_height_latent_dim = 16
+        height_encoder_hidden_dims = [64, 32]
+        use_teacher_mixer = True
+        teacher_mixer_token_dim = 64
+        teacher_mixer_num_blocks = 2
+        teacher_mixer_token_hidden_dim = 64
+        teacher_mixer_channel_hidden_dim = 128
+        teacher_encoder_hidden_dims = [128]
+        use_actor_film = True
+
+    class algorithm(LeggedRobotCfgMoECTS.algorithm):
+        num_mini_batches = 16
     
     class runner(LeggedRobotCfgMoECTS.runner):
         run_name = ''

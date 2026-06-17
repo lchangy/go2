@@ -30,6 +30,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 import itertools
@@ -72,15 +73,19 @@ class MoECTS(CTS):
         self.model = model
         self.model.to(self.device)
         self.storage = None # initialized later
+        teacher_context_params = list(self.model.teacher_context_parameters())
         params1 = [
             {"params": self.model.teacher_encoder.parameters()},
             {"params": self.model.critic.parameters()},
             {"params": self.model.actor.parameters()},
             {"params": self.model.std}
         ]
+        if teacher_context_params:
+            params1.insert(0, {"params": teacher_context_params})
         self.optimizer1 = optim.Adam(params1, lr=learning_rate)
         self.optimizer2 = optim.Adam(self.model.student_moe_encoder.parameters(), lr=student_encoder_learning_rate)
         self.transition = RolloutStorageCTS.Transition()
+        self.tb_metrics = {}
 
         # CTS parameters
         self.clip_param = clip_param
@@ -107,21 +112,76 @@ class MoECTS(CTS):
         mean_entropy_loss = 0
         mean_latent_loss = 0
         mean_load_balance_loss = 0
+        mean_latent_l2 = 0
+        mean_latent_cosine = 0
+        mean_gate_entropy = 0
+        mean_gate_usage = None
         assert not self.model.is_recurrent
-        data = list(self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs))
+        include_privileged_history = getattr(self.model, "use_teacher_mixer", False)
+        def mini_batches():
+            return self.storage.mini_batch_generator(
+                self.num_mini_batches,
+                self.num_learning_epochs,
+                include_privileged_history=include_privileged_history,
+            )
+        def unpack_sample(sample):
+            if include_privileged_history:
+                (
+                    obs_batch, privileged_obs_batch, actions_batch, history_batch, privileged_history_batch,
+                    target_values_batch, advantages_batch, returns_batch,
+                    old_actions_log_prob_batch, old_mu_batch, old_sigma_batch,
+                    hid_states_batch, masks_batch
+                ) = sample
+            else:
+                (
+                    obs_batch, privileged_obs_batch, actions_batch, history_batch,
+                    target_values_batch, advantages_batch, returns_batch,
+                    old_actions_log_prob_batch, old_mu_batch, old_sigma_batch,
+                    hid_states_batch, masks_batch
+                ) = sample
+                privileged_history_batch = None
+            return (
+                obs_batch,
+                privileged_obs_batch,
+                actions_batch,
+                history_batch,
+                privileged_history_batch,
+                target_values_batch,
+                advantages_batch,
+                returns_batch,
+                old_actions_log_prob_batch,
+                old_mu_batch,
+                old_sigma_batch,
+                hid_states_batch,
+                masks_batch,
+            )
         teacher_samples = self.teacher_num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
         student_samples = self.student_num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
-        for sample in data:
+        for sample in mini_batches():
             (
-                obs_batch, privileged_obs_batch, actions_batch, history_batch,
+                obs_batch, privileged_obs_batch, actions_batch, history_batch, privileged_history_batch,
                 target_values_batch, advantages_batch, returns_batch,
                 old_actions_log_prob_batch, old_mu_batch, old_sigma_batch,
                 hid_states_batch, masks_batch
-            ) = sample
+            ) = unpack_sample(sample)
             def get_results(start, end, is_teacher):
-                self.model.act(obs_batch[start:end], privileged_obs_batch[start:end], history_batch[start:end], is_teacher)
+                kwargs = {}
+                if privileged_history_batch is not None:
+                    kwargs["privileged_history"] = privileged_history_batch[start:end]
+                self.model.act(
+                    obs_batch[start:end],
+                    privileged_obs_batch[start:end],
+                    history_batch[start:end],
+                    is_teacher,
+                    **kwargs,
+                )
                 actions_log_prob = self.model.get_actions_log_prob(actions_batch[start:end])
-                value = self.model.evaluate(privileged_obs_batch[start:end], history_batch[start:end], is_teacher)
+                value = self.model.evaluate(
+                    privileged_obs_batch[start:end],
+                    history_batch[start:end],
+                    is_teacher,
+                    **kwargs,
+                )
                 mu = self.model.action_mean
                 sigma = self.model.action_std
                 entropy = self.model.entropy
@@ -194,23 +254,33 @@ class MoECTS(CTS):
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy_loss += entropy_batch.mean().item()
         
-        for sample in data:
+        for sample in mini_batches():
             (
-                obs_batch, privileged_obs_batch, actions_batch, history_batch,
+                obs_batch, privileged_obs_batch, actions_batch, history_batch, privileged_history_batch,
                 target_values_batch, advantages_batch, returns_batch,
                 old_actions_log_prob_batch, old_mu_batch, old_sigma_batch,
                 hid_states_batch, masks_batch
-            ) = sample
+            ) = unpack_sample(sample)
             # Student encoder update
             student_latent, gating_weights = self.model.student_moe_encoder(history_batch[teacher_samples:])
             with torch.no_grad():
-                teacher_latent = self.model.teacher_encoder(privileged_obs_batch[teacher_samples:])
+                teacher_privileged_history = None
+                if privileged_history_batch is not None:
+                    teacher_privileged_history = privileged_history_batch[teacher_samples:]
+                teacher_latent = self.model.encode_teacher_latent(
+                    privileged_obs_batch[teacher_samples:],
+                    history=history_batch[teacher_samples:],
+                    privileged_history=teacher_privileged_history,
+                )
             latent_loss = (teacher_latent - student_latent).pow(2).mean()
+            latent_l2 = torch.norm(teacher_latent - student_latent, dim=1).mean()
+            latent_cosine = F.cosine_similarity(teacher_latent, student_latent, dim=1).mean()
 
             # Load balance loss
             mean_usage = torch.mean(gating_weights, dim=0)
             target_usage = torch.full_like(mean_usage, 1.0 / gating_weights.shape[1])
             load_balance_loss = torch.mean((mean_usage - target_usage).pow(2))
+            gate_entropy = -(gating_weights * torch.log(gating_weights + 1e-8)).sum(dim=1).mean()
             # load_balance_loss = torch.sum(mean_usage.pow(2)) * gating_weights.shape[1]  # Switch Transformer style
 
             student_loss = latent_loss + self.load_balance_coef * load_balance_loss
@@ -222,6 +292,13 @@ class MoECTS(CTS):
 
             mean_latent_loss += latent_loss.item()
             mean_load_balance_loss += load_balance_loss.item()
+            mean_latent_l2 += latent_l2.item()
+            mean_latent_cosine += latent_cosine.item()
+            mean_gate_entropy += gate_entropy.item()
+            if mean_gate_usage is None:
+                mean_gate_usage = mean_usage.detach()
+            else:
+                mean_gate_usage += mean_usage.detach()
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
@@ -229,6 +306,19 @@ class MoECTS(CTS):
         mean_entropy_loss /= num_updates
         mean_latent_loss /= num_updates
         mean_load_balance_loss /= num_updates
+        mean_latent_l2 /= num_updates
+        mean_latent_cosine /= num_updates
+        mean_gate_entropy /= num_updates
+        mean_gate_usage = mean_gate_usage / num_updates
+        self.tb_metrics = {
+            "latent_l2": mean_latent_l2,
+            "latent_cosine_similarity": mean_latent_cosine,
+            "gate_entropy": mean_gate_entropy,
+            "gate_usage": mean_gate_usage.detach().cpu(),
+            "gate_usage_max": mean_gate_usage.max().item(),
+            "gate_usage_min": mean_gate_usage.min().item(),
+            "gate_usage_std": mean_gate_usage.std(unbiased=False).item(),
+        }
         self.storage.clear()
 
         return mean_value_loss, mean_surrogate_loss, mean_entropy_loss, mean_latent_loss, mean_load_balance_loss

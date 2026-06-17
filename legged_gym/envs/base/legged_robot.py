@@ -171,6 +171,57 @@ class LeggedRobot(BaseTask):
         current_scale = (1.0 - percentage) * cfg_start_val + percentage * cfg_end_val
         return current_scale
 
+    def get_current_range(self, curriculum_config, default_range):
+        """Linearly interpolate a domain randomization range over training iterations."""
+        if curriculum_config is None:
+            return default_range
+        current_iter = self.common_step_counter // getattr(self, "num_steps_per_env", 24)
+        start_iter = curriculum_config['start_iter']
+        end_iter = curriculum_config['end_iter']
+        percentage = (current_iter - start_iter) / (end_iter - start_iter)
+        percentage = max(min(percentage, 1.0), 0.0)
+
+        start_low, start_high = curriculum_config['start_range']
+        end_low, end_high = curriculum_config['end_range']
+        current_low = (1.0 - percentage) * start_low + percentage * end_low
+        current_high = (1.0 - percentage) * start_high + percentage * end_high
+        return [current_low, current_high]
+
+    def _update_payload_com_props(self, env_ids):
+        if len(env_ids) == 0:
+            return
+        payload_cfg = getattr(self.cfg.domain_rand, "payload_mass_curriculum", None)
+        com_cfg = getattr(self.cfg.domain_rand, "base_com_curriculum", None)
+        should_update_payload = self.cfg.domain_rand.randomize_base_mass and payload_cfg is not None
+        should_update_com = self.cfg.domain_rand.randomize_base_com and com_cfg is not None
+        if not should_update_payload and not should_update_com:
+            return
+
+        if should_update_payload:
+            payload_range = self.get_current_range(payload_cfg, self.cfg.domain_rand.added_mass_range)
+            self.payload_masses[env_ids, 0] = torch_rand_float(
+                payload_range[0], payload_range[1], (len(env_ids), 1), device=self.device
+            ).squeeze(1)
+        if should_update_com:
+            com_range = self.get_current_range(com_cfg, self.cfg.domain_rand.added_base_com_range)
+            self.base_com_offsets[env_ids] = torch_rand_float(
+                com_range[0], com_range[1], (len(env_ids), 3), device=self.device
+            )
+
+        for env_id in env_ids.detach().cpu().numpy().tolist():
+            body_props = self.gym.get_actor_rigid_body_properties(self.envs[env_id], self.actor_handles[env_id])
+            if should_update_payload:
+                body_props[0].mass = self.default_body_props[0].mass + float(self.payload_masses[env_id, 0].item())
+            if should_update_com:
+                body_props[0].com = gymapi.Vec3(
+                    self.default_body_props[0].com.x + float(self.base_com_offsets[env_id, 0].item()),
+                    self.default_body_props[0].com.y + float(self.base_com_offsets[env_id, 1].item()),
+                    self.default_body_props[0].com.z + float(self.base_com_offsets[env_id, 2].item()),
+                )
+            self.gym.set_actor_rigid_body_properties(
+                self.envs[env_id], self.actor_handles[env_id], body_props, recomputeInertia=True
+            )
+
     def check_termination(self):
         """ Check if environments need to be reset
         """
@@ -208,6 +259,7 @@ class LeggedRobot(BaseTask):
         if self.cfg.domain_rand.randomize_pd_gains:
             self.p_gains_multiplier[env_ids] = torch_rand_float(self.cfg.domain_rand.stiffness_multiplier_range[0], self.cfg.domain_rand.stiffness_multiplier_range[1], (len(env_ids), self.num_actions), device=self.device)
             self.d_gains_multiplier[env_ids] =  torch_rand_float(self.cfg.domain_rand.damping_multiplier_range[0], self.cfg.domain_rand.damping_multiplier_range[1], (len(env_ids), self.num_actions), device=self.device)
+        self._update_payload_com_props(env_ids)
 
         # update terrain curriculum before reset root states
         if self.cfg.terrain.curriculum:
@@ -252,6 +304,8 @@ class LeggedRobot(BaseTask):
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
+        self.last_reward_terms = {}
+        self.last_raw_reward_terms = {}
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             raw_rew = self.reward_functions[i]()
@@ -267,13 +321,18 @@ class LeggedRobot(BaseTask):
                 rew = torch.where(need_turn_over, turn_over_rew, rew)
             self.rew_buf += rew
             self.episode_sums[name] += rew
+            self.last_raw_reward_terms[name] = raw_rew.detach()
+            self.last_reward_terms[name] = rew.detach()
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         # add termination reward after clipping
         if "termination" in self.reward_scales:
-            rew = self._reward_termination() * self.reward_scales["termination"]
+            raw_rew = self._reward_termination()
+            rew = raw_rew * self.reward_scales["termination"]
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
+            self.last_raw_reward_terms["termination"] = raw_rew.detach()
+            self.last_reward_terms["termination"] = rew.detach()
     
     def compute_observations(self):
         """ Computes observations
@@ -386,7 +445,7 @@ class LeggedRobot(BaseTask):
         #         print(f"Mass of body {i}: {p.mass} (before randomization)")
         #     print(f"Total mass {sum} (before randomization)")
         # randomize base mass
-        if self.cfg.domain_rand.randomize_base_mass:
+        if self.cfg.domain_rand.randomize_base_mass and getattr(self.cfg.domain_rand, "payload_mass_curriculum", None) is None:
             rng = self.cfg.domain_rand.added_mass_range
             props[0].mass += np.random.uniform(rng[0], rng[1])
 
@@ -397,7 +456,7 @@ class LeggedRobot(BaseTask):
                 props[i].mass *= self.multiplied_link_masses_ratio[0,i-1]
 
         # randomize base com
-        if self.cfg.domain_rand.randomize_base_com:
+        if self.cfg.domain_rand.randomize_base_com and getattr(self.cfg.domain_rand, "base_com_curriculum", None) is None:
             self.added_base_com = torch_rand_float(self.cfg.domain_rand.added_base_com_range[0], self.cfg.domain_rand.added_base_com_range[1], (1, 3), device=self.device)
             props[0].com += gymapi.Vec3(self.added_base_com[0, 0], self.added_base_com[0, 1],
                                     self.added_base_com[0, 2])
@@ -710,14 +769,19 @@ class LeggedRobot(BaseTask):
     def _push_robots(self):
         """ Random pushes the robots. Emulates an impulse by setting a randomized base velocity. 
         """
+        self.external_wrenches.zero_()
         env_ids = torch.arange(self.num_envs, device=self.device)
         push_env_ids = env_ids[self.episode_length_buf[env_ids] % int(self.cfg.domain_rand.push_interval) == 0]
         if len(push_env_ids) == 0:
             return
         max_vel = self.cfg.domain_rand.max_push_vel_xy
         max_push_ang = self.cfg.domain_rand.max_push_ang_vel
-        self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device) # lin vel x/y
-        self.root_states[:, 10:13] = torch_rand_float(-max_push_ang, max_push_ang, (self.num_envs, 3), device=self.device) # ang vel x/y/z
+        push_lin_vel = torch_rand_float(-max_vel, max_vel, (len(push_env_ids), 2), device=self.device)
+        push_ang_vel = torch_rand_float(-max_push_ang, max_push_ang, (len(push_env_ids), 3), device=self.device)
+        self.root_states[push_env_ids, 7:9] = push_lin_vel # lin vel x/y
+        self.root_states[push_env_ids, 10:13] = push_ang_vel # ang vel x/y/z
+        self.external_wrenches[push_env_ids, :2] = push_lin_vel
+        self.external_wrenches[push_env_ids, 3:6] = push_ang_vel
         
         env_ids_int32 = push_env_ids.to(dtype=torch.int32)
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
@@ -802,6 +866,9 @@ class LeggedRobot(BaseTask):
         self.commands_resampling_step = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
         self.commands_xy_accumulation = torch.zeros(self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False)
         self.zero_command_proba = 0.0
+        self.payload_masses = torch.zeros(self.num_envs, 1, dtype=torch.float, device=self.device, requires_grad=False)
+        self.base_com_offsets = torch.zeros(self.num_envs, 3, dtype=torch.float, device=self.device, requires_grad=False)
+        self.external_wrenches = torch.zeros(self.num_envs, 6, dtype=torch.float, device=self.device, requires_grad=False)
         self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
         self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
@@ -1215,7 +1282,11 @@ class LeggedRobot(BaseTask):
     #------------ reward functions----------------
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
-        return torch.square(self.base_lin_vel[:, 2])
+        lin_vel_z = self.base_lin_vel[:, 2].clip(
+            min=-self.cfg.rewards.lin_vel_z_clip,
+            max=self.cfg.rewards.lin_vel_z_clip,
+        )
+        return torch.square(lin_vel_z)
     
     def _reward_ang_vel_xy(self):
         # Penalize xy axes base angular velocity
@@ -1383,7 +1454,11 @@ class LeggedRobot(BaseTask):
 
     def _reward_correct_base_height(self):
         base_height = self._get_base_height()
-        rew = torch.square(base_height - self.cfg.rewards.base_height_target)
+        height_error = (base_height - self.cfg.rewards.base_height_target).clip(
+            min=-self.cfg.rewards.base_height_error_clip,
+            max=self.cfg.rewards.base_height_error_clip,
+        )
+        rew = torch.square(height_error)
         return rew
 
     def _reward_feet_regulation(self):

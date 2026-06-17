@@ -141,12 +141,14 @@ class LeggedRobotCfg(BaseConfig):
 
         randomize_base_mass = True
         added_mass_range = [-1., 1.]
+        payload_mass_curriculum = None
 
         randomize_link_mass = True
         multiplied_link_mass_range = [0.9, 1.1]
 
         randomize_base_com = True
         added_base_com_range = [-0.03, 0.03]
+        base_com_curriculum = None
 
         randomize_restitution = False # restitution to robot links (Robot init)
         restitution_range = [0.0, 0.2]
@@ -197,6 +199,8 @@ class LeggedRobotCfg(BaseConfig):
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
         base_height_target = 1.
+        lin_vel_z_clip = 5.0
+        base_height_error_clip = 1.0
         max_contact_force = 100. # forces above this value are penalized
         curriculum_rewards = None  # reward names to apply curriculum scaling to, List[dict]
         # eg: [{'reward_name': 'lin_vel_z', 'start_iter': 0, 'end_iter': 1500, 'start_value': 1.0, 'end_value': 0.0}]

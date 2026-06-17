@@ -100,8 +100,26 @@ class CTS:
         assert len(self.teacher_env_idxs) == self.teacher_num_envs, f"{len(self.teacher_env_idxs)=} != {self.teacher_num_envs=}"
         assert len(self.student_env_idxs) == self.student_num_envs, f"{len(self.student_env_idxs)=} != {self.student_num_envs=}"
 
-    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
-        self.storage = RolloutStorageCTS(num_envs, self.teacher_num_envs, self.history_length, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device)
+    def init_storage(
+        self,
+        num_envs,
+        num_transitions_per_env,
+        actor_obs_shape,
+        critic_obs_shape,
+        action_shape,
+        privileged_history_shape=None,
+    ):
+        self.storage = RolloutStorageCTS(
+            num_envs,
+            self.teacher_num_envs,
+            self.history_length,
+            num_transitions_per_env,
+            actor_obs_shape,
+            critic_obs_shape,
+            action_shape,
+            self.device,
+            privileged_history_shape=privileged_history_shape,
+        )
 
     def test_mode(self):
         self.model.test()
@@ -109,20 +127,27 @@ class CTS:
     def train_mode(self):
         self.model.train()
 
-    def act(self, obs, privileged_obs, history):
+    def act(self, obs, privileged_obs, history, privileged_history=None):
         history = history.clone()
-        def get_results(obs, privileged_obs, history, is_teacher):
-            actions = self.model.act(obs, privileged_obs, history, is_teacher).detach()
+        if privileged_history is not None:
+            privileged_history = privileged_history.clone()
+        def get_results(obs, privileged_obs, history, privileged_history, is_teacher):
+            kwargs = {}
+            if privileged_history is not None:
+                kwargs["privileged_history"] = privileged_history
+            actions = self.model.act(obs, privileged_obs, history, is_teacher, **kwargs).detach()
             return (
                 actions,
-                self.model.evaluate(privileged_obs, history, is_teacher).detach(),
+                self.model.evaluate(privileged_obs, history, is_teacher, **kwargs).detach(),
                 self.model.get_actions_log_prob(actions).detach(),
                 self.model.action_mean.detach(),
                 self.model.action_std.detach(),
             )
         ti, si = self.teacher_env_idxs, self.student_env_idxs
-        teacher_results = get_results(obs[ti], privileged_obs[ti], history[ti], True)
-        student_results = get_results(obs[si], privileged_obs[si], history[si], False)
+        teacher_privileged_history = privileged_history[ti] if privileged_history is not None else None
+        student_privileged_history = privileged_history[si] if privileged_history is not None else None
+        teacher_results = get_results(obs[ti], privileged_obs[ti], history[ti], teacher_privileged_history, True)
+        student_results = get_results(obs[si], privileged_obs[si], history[si], student_privileged_history, False)
         results = []
         for x1, x2 in zip(teacher_results, student_results):
             results.append(torch.cat([x1, x2], dim=0))
@@ -134,6 +159,11 @@ class CTS:
         self.transition.action_sigma = results[4]
         # need to record obs and critic_obs before env.step()
         self.transition.history = torch.cat([history[ti], history[si]], dim=0)
+        if privileged_history is not None:
+            self.transition.privileged_history = torch.cat(
+                [privileged_history[ti], privileged_history[si]],
+                dim=0,
+            )
         self.transition.observations = torch.cat([obs[ti], obs[si]], dim=0)
         self.transition.critic_observations = torch.cat([privileged_obs[ti], privileged_obs[si]], dim=0)
         real_actions = torch.zeros_like(self.transition.actions)
@@ -156,11 +186,16 @@ class CTS:
         self.transition.clear()
         self.model.reset(dones)
     
-    def compute_returns(self, last_privileged_obs, last_history):
+    def compute_returns(self, last_privileged_obs, last_history, last_privileged_history=None):
         ti, si = self.teacher_env_idxs, self.student_env_idxs
+        teacher_kwargs = {}
+        student_kwargs = {}
+        if last_privileged_history is not None:
+            teacher_kwargs["privileged_history"] = last_privileged_history[ti]
+            student_kwargs["privileged_history"] = last_privileged_history[si]
         last_values = torch.cat([
-            self.model.evaluate(last_privileged_obs[ti], last_history[ti], True).detach(),
-            self.model.evaluate(last_privileged_obs[si], last_history[si], False).detach(),
+            self.model.evaluate(last_privileged_obs[ti], last_history[ti], True, **teacher_kwargs).detach(),
+            self.model.evaluate(last_privileged_obs[si], last_history[si], False, **student_kwargs).detach(),
         ], dim=0)
         self.storage.compute_returns(last_values, self.gamma, self.lam)
 

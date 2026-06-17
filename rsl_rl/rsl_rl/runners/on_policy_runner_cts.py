@@ -86,16 +86,31 @@ class OnPolicyRunnerCTS:
             self.env.num_envs,
             history_length,
             **self.policy_cfg).to(self.device)
+        self.use_privileged_history = getattr(model, "use_teacher_mixer", False)
         alg_class = eval(self.cfg["algorithm_class_name"])
         self.alg: Union[CTS, MoENGCTS, MCPCTS, ACMoECTS, DualMoECTS, MoECTS] = alg_class(model, self.env.num_envs, history_length, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
 
         # init storage and model
-        self.alg.init_storage(self.env.num_envs, self.num_steps_per_env, [self.env.num_obs], [self.env.num_privileged_obs], [self.env.num_actions])
+        privileged_history_shape = [history_length * self.env.num_privileged_obs] if self.use_privileged_history else None
+        self.alg.init_storage(
+            self.env.num_envs,
+            self.num_steps_per_env,
+            [self.env.num_obs],
+            [self.env.num_privileged_obs],
+            [self.env.num_actions],
+            privileged_history_shape=privileged_history_shape,
+        )
 
         # init history
         self.history = torch.zeros((self.env.num_envs, history_length, self.env.num_obs), device=self.device)
+        self.privileged_history = None
+        if self.use_privileged_history:
+            self.privileged_history = torch.zeros(
+                (self.env.num_envs, history_length, self.env.num_privileged_obs),
+                device=self.device,
+            )
 
         # Log
         self.log_dir = log_dir
@@ -119,6 +134,117 @@ class OnPolicyRunnerCTS:
         except Exception as e:
             print(f"[INFO] RoboGauge client could not be initialized: {e}, disabling RoboGauge interface.")
             self.robogauge_client = None
+
+    def _write_domain_rand_metrics(self, it):
+        if hasattr(self.env, "payload_masses"):
+            payload = self.env.payload_masses.detach().float()
+            self.writer.add_scalar('DomainRand/payload_mass_mean', payload.mean().item(), it)
+            self.writer.add_scalar('DomainRand/payload_mass_min', payload.min().item(), it)
+            self.writer.add_scalar('DomainRand/payload_mass_max', payload.max().item(), it)
+        if hasattr(self.env, "base_com_offsets"):
+            com = self.env.base_com_offsets.detach().float()
+            com_norm = torch.norm(com, dim=1)
+            self.writer.add_scalar('DomainRand/base_com_x_mean', com[:, 0].mean().item(), it)
+            self.writer.add_scalar('DomainRand/base_com_y_mean', com[:, 1].mean().item(), it)
+            self.writer.add_scalar('DomainRand/base_com_z_mean', com[:, 2].mean().item(), it)
+            self.writer.add_scalar('DomainRand/base_com_norm_mean', com_norm.mean().item(), it)
+            self.writer.add_scalar('DomainRand/base_com_norm_max', com_norm.max().item(), it)
+        if hasattr(self.env, "motor_strengths"):
+            motor_strength = self.env.motor_strengths.detach().float()
+            self.writer.add_scalar('DomainRand/motor_strength_mean', motor_strength.mean().item(), it)
+            self.writer.add_scalar('DomainRand/motor_strength_std', motor_strength.std(unbiased=False).item(), it)
+        if hasattr(self.env, "friction_coeffs"):
+            friction = self.env.friction_coeffs.detach().float()
+            self.writer.add_scalar('DomainRand/friction_mean', friction.mean().item(), it)
+            self.writer.add_scalar('DomainRand/friction_min', friction.min().item(), it)
+            self.writer.add_scalar('DomainRand/friction_max', friction.max().item(), it)
+        if hasattr(self.env, "get_current_range"):
+            payload_cfg = getattr(self.env.cfg.domain_rand, "payload_mass_curriculum", None)
+            com_cfg = getattr(self.env.cfg.domain_rand, "base_com_curriculum", None)
+            if payload_cfg is not None:
+                payload_range = self.env.get_current_range(payload_cfg, self.env.cfg.domain_rand.added_mass_range)
+                self.writer.add_scalar('DomainRand/payload_range_low', payload_range[0], it)
+                self.writer.add_scalar('DomainRand/payload_range_high', payload_range[1], it)
+            if com_cfg is not None:
+                com_range = self.env.get_current_range(com_cfg, self.env.cfg.domain_rand.added_base_com_range)
+                self.writer.add_scalar('DomainRand/base_com_range_abs', max(abs(com_range[0]), abs(com_range[1])), it)
+
+    def _write_tracking_metrics(self, it):
+        if not all(hasattr(self.env, attr) for attr in ("commands", "base_lin_vel", "base_ang_vel")):
+            return
+        commands = self.env.commands.detach().float()
+        base_lin_vel = self.env.base_lin_vel.detach().float()
+        base_ang_vel = self.env.base_ang_vel.detach().float()
+        lin_error = commands[:, :2] - base_lin_vel[:, :2]
+        yaw_error = commands[:, 2] - base_ang_vel[:, 2]
+        self.writer.add_scalar('Command/cmd_x_abs_mean', commands[:, 0].abs().mean().item(), it)
+        self.writer.add_scalar('Command/cmd_y_abs_mean', commands[:, 1].abs().mean().item(), it)
+        self.writer.add_scalar('Command/cmd_yaw_abs_mean', commands[:, 2].abs().mean().item(), it)
+        self.writer.add_scalar('Command/zero_cmd_ratio', (torch.norm(commands[:, :3], dim=1) < 0.1).float().mean().item(), it)
+        self.writer.add_scalar('Tracking/lin_vel_error_mean', torch.norm(lin_error, dim=1).mean().item(), it)
+        self.writer.add_scalar('Tracking/lin_vel_error_rmse', torch.sqrt(torch.mean(lin_error.pow(2))).item(), it)
+        self.writer.add_scalar('Tracking/yaw_vel_error_mean', yaw_error.abs().mean().item(), it)
+        self.writer.add_scalar('Tracking/yaw_vel_error_rmse', torch.sqrt(torch.mean(yaw_error.pow(2))).item(), it)
+        self.writer.add_scalar('State/base_lin_vel_x_mean', base_lin_vel[:, 0].mean().item(), it)
+        self.writer.add_scalar('State/base_lin_vel_y_mean', base_lin_vel[:, 1].mean().item(), it)
+        self.writer.add_scalar('State/base_ang_vel_z_mean', base_ang_vel[:, 2].mean().item(), it)
+
+    def _write_moe_cts_metrics(self, it):
+        metrics = getattr(self.alg, "tb_metrics", {})
+        if not metrics:
+            return
+        gate_usage = metrics.get("gate_usage")
+        if gate_usage is not None:
+            for expert_id, usage in enumerate(gate_usage):
+                self.writer.add_scalar(f'MoE/expert_{expert_id}_usage', float(usage), it)
+        if "gate_entropy" in metrics:
+            self.writer.add_scalar('MoE/gate_entropy', metrics["gate_entropy"], it)
+        if "gate_usage_max" in metrics:
+            self.writer.add_scalar('MoE/max_expert_usage', metrics["gate_usage_max"], it)
+        if "gate_usage_min" in metrics:
+            self.writer.add_scalar('MoE/min_expert_usage', metrics["gate_usage_min"], it)
+        if "gate_usage_std" in metrics:
+            self.writer.add_scalar('MoE/usage_std', metrics["gate_usage_std"], it)
+        if "latent_l2" in metrics:
+            self.writer.add_scalar('CTS/latent_l2', metrics["latent_l2"], it)
+        if "latent_cosine_similarity" in metrics:
+            self.writer.add_scalar('CTS/latent_cosine_similarity', metrics["latent_cosine_similarity"], it)
+
+    def _write_reward_metrics(self, locs):
+        count = locs.get('rollout_reward_count', 0)
+        if count > 0:
+            reward_mean = locs['rollout_reward_sum'] / count
+            reward_var = max(locs['rollout_reward_sq_sum'] / count - reward_mean * reward_mean, 0.0)
+            self.writer.add_scalar('Reward/step_mean', reward_mean, locs['it'])
+            self.writer.add_scalar('Reward/step_std', reward_var ** 0.5, locs['it'])
+            self.writer.add_scalar('Reward/step_min', locs['rollout_reward_min'], locs['it'])
+            self.writer.add_scalar('Reward/step_max', locs['rollout_reward_max'], locs['it'])
+        teacher_count = locs.get('rollout_teacher_reward_count', 0)
+        if teacher_count > 0:
+            self.writer.add_scalar(
+                'Reward/teacher_step_mean',
+                locs['rollout_teacher_reward_sum'] / teacher_count,
+                locs['it'],
+            )
+        student_count = locs.get('rollout_student_reward_count', 0)
+        if student_count > 0:
+            self.writer.add_scalar(
+                'Reward/student_step_mean',
+                locs['rollout_student_reward_sum'] / student_count,
+                locs['it'],
+            )
+        if hasattr(self.env, "reward_curriculum_scales"):
+            for reward_name, scale in sorted(self.env.reward_curriculum_scales.items()):
+                self.writer.add_scalar(f'RewardCurriculum/{reward_name}_scale', scale, locs['it'])
+        term_sums = locs.get('rollout_reward_term_sums', {})
+        term_abs_sums = locs.get('rollout_reward_term_abs_sums', {})
+        term_counts = locs.get('rollout_reward_term_counts', {})
+        for reward_name in sorted(term_sums.keys()):
+            count = term_counts.get(reward_name, 0)
+            if count == 0:
+                continue
+            self.writer.add_scalar(f'RewardTerms/{reward_name}_mean', term_sums[reward_name] / count, locs['it'])
+            self.writer.add_scalar(f'RewardTerms/{reward_name}_abs_mean', term_abs_sums[reward_name] / count, locs['it'])
     
     def learn(self, num_learning_iterations, init_at_random_ep_len=False):
         # initialize writer
@@ -131,6 +257,8 @@ class OnPolicyRunnerCTS:
         assert privileged_obs is not None
         obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         self.history = torch.cat([self.history[:, 1:], obs.unsqueeze(1)], dim=1)
+        if self.privileged_history is not None:
+            self.privileged_history = torch.cat([self.privileged_history[:, 1:], privileged_obs.unsqueeze(1)], dim=1)
         self.alg.model.train() # switch to train mode (for dropout for example)
 
         ep_infos = []
@@ -146,14 +274,55 @@ class OnPolicyRunnerCTS:
         tot_iter = self.current_learning_iteration + num_learning_iterations
         for it in range(self.current_learning_iteration, tot_iter):
             start = time.time()
+            rollout_reward_sum = 0.0
+            rollout_reward_sq_sum = 0.0
+            rollout_reward_min = float("inf")
+            rollout_reward_max = float("-inf")
+            rollout_reward_count = 0
+            rollout_teacher_reward_sum = 0.0
+            rollout_teacher_reward_count = 0
+            rollout_student_reward_sum = 0.0
+            rollout_student_reward_count = 0
+            rollout_reward_term_sums = {}
+            rollout_reward_term_abs_sums = {}
+            rollout_reward_term_counts = {}
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs, privileged_obs, self.history.flatten(1))
+                    if self.privileged_history is not None:
+                        actions = self.alg.act(
+                            obs,
+                            privileged_obs,
+                            self.history.flatten(1),
+                            self.privileged_history.flatten(1),
+                        )
+                    else:
+                        actions = self.alg.act(obs, privileged_obs, self.history.flatten(1))
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
                     obs, privileged_obs, rewards, dones = obs.to(self.device), privileged_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
+                    if 'time_outs' in infos:
+                        infos['time_outs'] = infos['time_outs'].to(self.device)
+                    reward_values = rewards.detach().float()
+                    rollout_reward_sum += reward_values.sum().item()
+                    rollout_reward_sq_sum += reward_values.pow(2).sum().item()
+                    rollout_reward_min = min(rollout_reward_min, reward_values.min().item())
+                    rollout_reward_max = max(rollout_reward_max, reward_values.max().item())
+                    rollout_reward_count += reward_values.numel()
+                    ti, si = self.alg.teacher_env_idxs, self.alg.student_env_idxs
+                    rollout_teacher_reward_sum += reward_values[ti].sum().item()
+                    rollout_teacher_reward_count += ti.numel()
+                    rollout_student_reward_sum += reward_values[si].sum().item()
+                    rollout_student_reward_count += si.numel()
+                    for reward_name, term_values in getattr(self.env, "last_reward_terms", {}).items():
+                        term_values = term_values.detach().float()
+                        rollout_reward_term_sums[reward_name] = rollout_reward_term_sums.get(reward_name, 0.0) + term_values.sum().item()
+                        rollout_reward_term_abs_sums[reward_name] = rollout_reward_term_abs_sums.get(reward_name, 0.0) + term_values.abs().sum().item()
+                        rollout_reward_term_counts[reward_name] = rollout_reward_term_counts.get(reward_name, 0) + term_values.numel()
                     self.history[dones > 0] = 0.0
                     self.history = torch.cat([self.history[:, 1:], obs.unsqueeze(1)], dim=1)
+                    if self.privileged_history is not None:
+                        self.privileged_history[dones > 0] = 0.0
+                        self.privileged_history = torch.cat([self.privileged_history[:, 1:], privileged_obs.unsqueeze(1)], dim=1)
                     self.alg.process_env_step(rewards, dones, infos)
                     
                     if self.log_dir is not None:
@@ -182,7 +351,14 @@ class OnPolicyRunnerCTS:
                 if self.cfg["algorithm_class_name"] in ["ACMoECTS", "DualMoECTS"]:
                     self.alg.compute_returns(obs, privileged_obs, self.history.flatten(1))
                 else:
-                    self.alg.compute_returns(privileged_obs, self.history.flatten(1))
+                    if self.privileged_history is not None:
+                        self.alg.compute_returns(
+                            privileged_obs,
+                            self.history.flatten(1),
+                            self.privileged_history.flatten(1),
+                        )
+                    else:
+                        self.alg.compute_returns(privileged_obs, self.history.flatten(1))
             
             if self.cfg["algorithm_class_name"] in ["CTS", "MCPCTS"]:
                 mean_value_loss, mean_surrogate_loss, mean_entropy_loss, mean_latent_loss = self.alg.update()
@@ -251,6 +427,17 @@ class OnPolicyRunnerCTS:
             self.writer.add_scalar('Train/mean_student_episode_length', statistics.mean(locs['student_lenbuffer']), locs['it'])
             self.writer.add_scalar('Train/mean_student_reward/time', statistics.mean(locs['student_rewbuffer']), self.tot_time)
             self.writer.add_scalar('Train/mean_student_episode_length/time', statistics.mean(locs['student_lenbuffer']), self.tot_time)
+        if len(locs['teacher_rewbuffer']) > 0 and len(locs['student_rewbuffer']) > 0:
+            teacher_reward = statistics.mean(locs['teacher_rewbuffer'])
+            student_reward = statistics.mean(locs['student_rewbuffer'])
+            teacher_len = statistics.mean(locs['teacher_lenbuffer'])
+            student_len = statistics.mean(locs['student_lenbuffer'])
+            self.writer.add_scalar('CTS/teacher_student_reward_gap', teacher_reward - student_reward, locs['it'])
+            self.writer.add_scalar('CTS/teacher_student_episode_length_gap', teacher_len - student_len, locs['it'])
+        self._write_domain_rand_metrics(locs['it'])
+        self._write_tracking_metrics(locs['it'])
+        self._write_moe_cts_metrics(locs['it'])
+        self._write_reward_metrics(locs)
 
         str = f" \033[1m Learning iteration {self.current_learning_iteration}/{locs['tot_iter']} \033[0m "
 

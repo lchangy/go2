@@ -47,11 +47,23 @@ class RolloutStorageCTS:
             self.action_sigma = None
             self.hidden_states = None
             self.history = None
+            self.privileged_history = None
 
         def clear(self):
             self.__init__()
 
-    def __init__(self, num_envs, teacher_num_envs, history_length, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu'):
+    def __init__(
+        self,
+        num_envs,
+        teacher_num_envs,
+        history_length,
+        num_transitions_per_env,
+        obs_shape,
+        privileged_obs_shape,
+        actions_shape,
+        device='cpu',
+        privileged_history_shape=None,
+    ):
 
         self.device = device
 
@@ -72,6 +84,10 @@ class RolloutStorageCTS:
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
         self.history = torch.zeros(num_transitions_per_env, num_envs, self.history_length * obs_shape[0], device=self.device)
+        if privileged_history_shape is not None:
+            self.privileged_history = torch.zeros(num_transitions_per_env, num_envs, *privileged_history_shape, device=self.device)
+        else:
+            self.privileged_history = None
 
         # For PPO
         self.actions_log_prob = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
@@ -97,6 +113,8 @@ class RolloutStorageCTS:
         if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
         self.actions[self.step].copy_(transition.actions)
         self.history[self.step].copy_(transition.history)
+        if self.privileged_history is not None:
+            self.privileged_history[self.step].copy_(transition.privileged_history)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
         self.values[self.step].copy_(transition.values)
@@ -150,7 +168,9 @@ class RolloutStorageCTS:
         trajectory_lengths = (done_indices[1:] - done_indices[:-1])
         return trajectory_lengths.float().mean(), self.rewards.mean()
 
-    def mini_batch_generator(self, num_mini_batches, num_epochs=8):
+    def mini_batch_generator(self, num_mini_batches, num_epochs=8, include_privileged_history=False):
+        if include_privileged_history and self.privileged_history is None:
+            raise AssertionError("privileged history was requested but was not allocated")
         teacher_samples_num = self.teacher_num_envs * self.num_transitions_per_env
         student_samples_num = self.student_num_envs * self.num_transitions_per_env
         teacher_mini_batch_size = teacher_samples_num // num_mini_batches
@@ -186,6 +206,11 @@ class RolloutStorageCTS:
         old_sigma = self.sigma.permute(1, 0, *action_dims).flatten(0, 1)
         hist_dims = list(range(2, self.history.dim()))
         history = self.history.permute(1, 0, *hist_dims).flatten(0, 1)
+        if include_privileged_history:
+            privileged_hist_dims = list(range(2, self.privileged_history.dim()))
+            privileged_history = self.privileged_history.permute(1, 0, *privileged_hist_dims).flatten(0, 1)
+        else:
+            privileged_history = None
         values = self.values.permute(1, 0, 2).flatten(0, 1)
         returns = self.returns.permute(1, 0, 2).flatten(0, 1)
         old_actions_log_prob = self.actions_log_prob.permute(1, 0, 2).flatten(0, 1)
@@ -212,5 +237,10 @@ class RolloutStorageCTS:
                 old_mu_batch = get_teacher_student_samples(old_mu, slice)
                 old_sigma_batch = get_teacher_student_samples(old_sigma, slice)
                 history_batch = get_teacher_student_samples(history, slice)
-                yield obs_batch, critic_observations_batch, actions_batch, history_batch, target_values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None
+                if include_privileged_history:
+                    privileged_history_batch = get_teacher_student_samples(privileged_history, slice)
+                    yield obs_batch, critic_observations_batch, actions_batch, history_batch, privileged_history_batch, target_values_batch, advantages_batch, returns_batch, \
+                           old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None
+                else:
+                    yield obs_batch, critic_observations_batch, actions_batch, history_batch, target_values_batch, advantages_batch, returns_batch, \
+                           old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None

@@ -60,16 +60,74 @@ def get_xbox_command(joystick, max_cmd):
     cmd_yaw = -rx * max_cmd[2]
     return np.array([cmd_x, cmd_y, cmd_yaw], dtype=np.float32)
 
+def get_keyboard_command(max_cmd, cmd_step, default_cmd):
+    running = True
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    keys = pygame.key.get_pressed()
+    new_cmd = np.zeros(3, dtype=np.float32)
+
+    if keys[pygame.K_SPACE]:
+        return np.zeros(3, dtype=np.float32), running
+    if keys[pygame.K_r]:
+        return default_cmd.copy(), running
+
+    if keys[pygame.K_w]:
+        new_cmd[0] += cmd_step[0]
+    if keys[pygame.K_s]:
+        new_cmd[0] -= cmd_step[0]
+    if keys[pygame.K_a]:
+        new_cmd[1] += cmd_step[1]
+    if keys[pygame.K_d]:
+        new_cmd[1] -= cmd_step[1]
+    if keys[pygame.K_q]:
+        new_cmd[2] += cmd_step[2]
+    if keys[pygame.K_e]:
+        new_cmd[2] -= cmd_step[2]
+
+    return np.clip(new_cmd, -max_cmd, max_cmd).astype(np.float32), running
+
+def update_keyboard_window(screen, font, cmd, max_cmd, cmd_step, default_cmd):
+    if screen is None:
+        return
+
+    screen.fill((24, 26, 30))
+    lines = [
+        "Go2 Keyboard Command",
+        "Focus this window. Hold W/S: vx   A/D: vy   Q/E: yaw",
+        "Release keys: stop   R: default command   Close: exit",
+        f"cmd: Vx={cmd[0]: .2f}, Vy={cmd[1]: .2f}, Wz={cmd[2]: .2f}",
+        f"hold speed: [{cmd_step[0]:.2f}, {cmd_step[1]:.2f}, {cmd_step[2]:.2f}]   default: [{default_cmd[0]:.2f}, {default_cmd[1]:.2f}, {default_cmd[2]:.2f}]",
+    ]
+
+    for i, line in enumerate(lines):
+        color = (235, 238, 242) if i == 0 else (196, 203, 213)
+        text = font.render(line, True, color)
+        screen.blit(text, (18, 16 + i * 28))
+    pygame.display.flip()
+
+def print_command_status(show_str, cmd, last_print_cmd, last_print_time):
+    now = time.time()
+    if last_print_cmd is None or not np.allclose(cmd, last_print_cmd) or now - last_print_time > 1.0:
+        print(show_str, end='\r')
+        return cmd.copy(), now
+    return last_print_cmd, last_print_time
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--save-video", action="store_true", help="Whether to save video of the simulation.")
     parser.add_argument("--visualize-moe-weights", action="store_true", help="Whether to visualize mixture of experts weights.")
     parser.add_argument("--save-moe-latent", action="store_true", help="Whether to save mixture of experts latent vectors.")
+    parser.add_argument("--config-file", default="go2.yaml", help="YAML config file in deploy/deploy_mujoco/configs.")
+    parser.add_argument("--keyboard-control", action="store_true", help="Use hold-to-move keyboard commands: W/S x, A/D y, Q/E yaw, release stop, R default.")
     args = parser.parse_args()
     save_video = args.save_video
     visualize_moe_weights = args.visualize_moe_weights
     save_moe_latent = args.save_moe_latent
-    config_file = "go2.yaml"
+    config_file = args.config_file
+    keyboard_control = args.keyboard_control
 
     pygame.init()
     use_joystick = False
@@ -81,6 +139,9 @@ if __name__ == "__main__":
         print(f"Detected Joystick: {joystick.get_name()}")
     else:
         print("No Joystick detected. Using default commands from config.")
+    if keyboard_control:
+        print("Keyboard control: focus the 'Go2 Keyboard Command' window first.")
+        print("Keys: hold W/S x, A/D y, Q/E yaw; release keys to stop; R uses the config default command.")
 
     with open(f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_mujoco/configs/{config_file}", "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
@@ -107,6 +168,9 @@ if __name__ == "__main__":
         num_obs = config["num_obs"]
 
         cmd = np.array(config["cmd_init"], dtype=np.float32)
+        max_cmd = np.array(config["max_cmd"], dtype=np.float32)
+        cmd_step = np.array(config.get("cmd_step", [0.6, 0.4, 0.8]), dtype=np.float32)
+        default_cmd = cmd.copy()
 
         idx_model2mj = idx_mj2model = list(range(num_actions))
         if 'mujoco_joint_names' in config and 'model_joint_names' in config:
@@ -114,6 +178,15 @@ if __name__ == "__main__":
             model_joint_names = config["model_joint_names"]
             idx_model2mj = [model_joint_names.index(joint) for joint in mujoco_joint_names]
             idx_mj2model = [mujoco_joint_names.index(joint) for joint in model_joint_names]
+
+    keyboard_screen = None
+    keyboard_font = None
+    if keyboard_control:
+        cmd = np.zeros_like(cmd)
+        pygame.display.set_caption("Go2 Keyboard Command")
+        keyboard_screen = pygame.display.set_mode((620, 170))
+        keyboard_font = pygame.font.Font(None, 24)
+        update_keyboard_window(keyboard_screen, keyboard_font, cmd, max_cmd, cmd_step, default_cmd)
 
     video_save_dir = str(PATH_PARENT / "videos")
     os.makedirs(video_save_dir, exist_ok=True)
@@ -174,6 +247,10 @@ if __name__ == "__main__":
         viewer.cam.elevation = -20.0
         viewer.cam.azimuth = 60.0
 
+        keyboard_running = True
+        last_print_cmd = None
+        last_print_time = 0.0
+
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:
@@ -184,10 +261,21 @@ if __name__ == "__main__":
             show_str = f"Speed: Vx={local_vel[0]:.2f}, Vy={local_vel[1]:.2f}, Wz={local_ang_vel[2]:.2f}, "
             step_start = time.time()
 
-            if use_joystick and counter % control_decimation == 0:
-                cmd = get_xbox_command(joystick, config["max_cmd"])
+            if counter % control_decimation == 0 and keyboard_control:
+                cmd, keyboard_running = get_keyboard_command(max_cmd, cmd_step, default_cmd)
+                update_keyboard_window(keyboard_screen, keyboard_font, cmd, max_cmd, cmd_step, default_cmd)
                 show_str += f"Cmd: Vx={cmd[0]:.2f}, Vy={cmd[1]:.2f}, Wz={cmd[2]:.2f}"
-                print(show_str, end='\r')
+                last_print_cmd, last_print_time = print_command_status(
+                    show_str, cmd, last_print_cmd, last_print_time
+                )
+                if not keyboard_running:
+                    break
+            elif use_joystick and counter % control_decimation == 0:
+                cmd = get_xbox_command(joystick, max_cmd)
+                show_str += f"Cmd: Vx={cmd[0]:.2f}, Vy={cmd[1]:.2f}, Wz={cmd[2]:.2f}"
+                last_print_cmd, last_print_time = print_command_status(
+                    show_str, cmd, last_print_cmd, last_print_time
+                )
 
             tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
             d.ctrl[:] = tau
@@ -249,6 +337,7 @@ if __name__ == "__main__":
                         
                         plt.draw()
                         plt.pause(0.001) # 这会造成大约 1ms 的延迟
+                        ax.set_title(f"Command: Vx={cmd[0]:.2f}, Vy={cmd[1]:.2f}, Wz={cmd[2]:.2f}")
                     if save_moe_latent:
                         all_latents.append(latent)
                 else:
@@ -273,3 +362,4 @@ if __name__ == "__main__":
         all_latents = np.array(all_latents)
         np.save(latent_path, all_latents)
         print(f"Latent vectors saved successfully to {latent_path}")
+    pygame.quit()
