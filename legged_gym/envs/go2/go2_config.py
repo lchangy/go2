@@ -47,6 +47,9 @@ GO2_POLICY_SWAV_HEIGHT_START = _env_int("GO2_POLICY_SWAV_HEIGHT_START", 76)
 GO2_POLICY_SWAV_HEIGHT_DIM = _env_int("GO2_POLICY_SWAV_HEIGHT_DIM", 187)
 GO2_POLICY_SWAV_HEIGHT_NOISE_STD = _env_float("GO2_POLICY_SWAV_HEIGHT_NOISE_STD", 0.02)
 GO2_POLICY_SWAV_HEIGHT_DROPOUT_PROB = _env_float("GO2_POLICY_SWAV_HEIGHT_DROPOUT_PROB", 0.1)
+GO2_ALG_NUM_MINI_BATCHES = _env_int("GO2_ALG_NUM_MINI_BATCHES", 4)
+GO2_ALG_LEARNING_RATE = _env_float("GO2_ALG_LEARNING_RATE", 1e-3)
+GO2_ALG_STUDENT_ENCODER_LEARNING_RATE = _env_float("GO2_ALG_STUDENT_ENCODER_LEARNING_RATE", 1e-3)
 GO2_ALG_STABLE_SWAV_COEF = _env_float("GO2_ALG_STABLE_SWAV_COEF", 0.01)
 
 GO2_PRIVILEGED_EXTRA_DIM = (
@@ -396,7 +399,9 @@ class GO2CfgMoECTS(LeggedRobotCfgMoECTS):
         swav_height_dropout_prob = GO2_POLICY_SWAV_HEIGHT_DROPOUT_PROB
 
     class algorithm(LeggedRobotCfgMoECTS.algorithm):
-        num_mini_batches = 4
+        num_mini_batches = GO2_ALG_NUM_MINI_BATCHES
+        learning_rate = GO2_ALG_LEARNING_RATE
+        student_encoder_learning_rate = GO2_ALG_STUDENT_ENCODER_LEARNING_RATE
         stable_swav_coef = GO2_ALG_STABLE_SWAV_COEF
     
     class runner(LeggedRobotCfgMoECTS.runner):
