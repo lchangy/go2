@@ -294,7 +294,7 @@ class GO2Cfg(LeggedRobotCfg):
             # training to y=1.5, font feet will collide noticeably, max y=1.0
             hip_to_default = -0.05
             # legs_distance = -1.5  # not good performance, avoid leg collision
-            # similar_to_default = -0.01
+            similar_to_default = -0.01
             # feet_contact_forces = -1.0  # try to add but no effect, remove
 
         turn_over_roll_threshold = math.pi / 4 # threshold on roll to use turn over rewards
