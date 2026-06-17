@@ -277,8 +277,8 @@ class GO2Cfg(LeggedRobotCfg):
         lin_vel_z_clip = 5.0 if GO2_REWARD_USE_LIN_VEL_Z_CLIP else None
         min_legs_distance = 0.1  # min distance between legs to not be considered stumbling
         class scales:
-            tracking_lin_vel = 1.0
-            tracking_ang_vel = 0.5
+            tracking_lin_vel = 2.0
+            tracking_ang_vel = 1.0
             lin_vel_z = -2.0
             ang_vel_xy = -0.05
             dof_acc = -2.5e-7
