@@ -1,7 +1,72 @@
 import math
+import os
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO, LeggedRobotCfgCTS, LeggedRobotCfgMoENGCTS, LeggedRobotCfgMoENGCTS, LeggedRobotCfgMCPCTS, LeggedRobotCfgACMoECTS, LeggedRobotCfgDualMoECTS, LeggedRobotCfgMoECTS
 
+def _env_bool(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes", "on")
+
+def _env_int(name, default):
+    value = os.getenv(name)
+    return default if value is None else int(value)
+
+def _env_float(name, default):
+    value = os.getenv(name)
+    return default if value is None else float(value)
+
+GO2_STRICT_BASELINE_ABLATION = True
+
+# Flip these switches one at a time for ablation comparisons.
+GO2_PRIVILEGED_INCLUDE_PAYLOAD = False
+GO2_PRIVILEGED_INCLUDE_BASE_COM = False
+GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH = False
+GO2_DOMAIN_USE_ENHANCED_PAYLOAD_RANGE = False
+GO2_DOMAIN_USE_PAYLOAD_CURRICULUM = False
+GO2_DOMAIN_USE_ENHANCED_BASE_COM_RANGE = False
+GO2_DOMAIN_USE_BASE_COM_CURRICULUM = False
+GO2_REWARD_USE_LIN_VEL_Z_CLIP = False
+GO2_POLICY_USE_HEIGHT_ENCODER = _env_bool("GO2_POLICY_USE_HEIGHT_ENCODER", False)
+GO2_POLICY_TEACHER_CONTEXT_MODE = os.getenv("GO2_POLICY_TEACHER_CONTEXT_MODE", "mixer")
+GO2_POLICY_USE_TEACHER_MIXER = GO2_POLICY_TEACHER_CONTEXT_MODE == "mixer"
+GO2_POLICY_TEACHER_SUMMARY_TOKENS = _env_int("GO2_POLICY_TEACHER_SUMMARY_TOKENS", 1)
+GO2_POLICY_TEACHER_SUMMARY_AGGREGATION = os.getenv("GO2_POLICY_TEACHER_SUMMARY_AGGREGATION", "first")
+GO2_POLICY_USE_ACTOR_FILM = _env_bool("GO2_POLICY_USE_ACTOR_FILM", False)
+GO2_POLICY_DETACH_CRITIC_CONTEXT = _env_bool("GO2_POLICY_DETACH_CRITIC_CONTEXT", True)
+GO2_POLICY_CRITIC_USE_PRIVILEGED_OBS = _env_bool("GO2_POLICY_CRITIC_USE_PRIVILEGED_OBS", True)
+GO2_POLICY_USE_STABLE_SWAV = _env_bool("GO2_POLICY_USE_STABLE_SWAV", False)
+GO2_POLICY_STABLE_LATENT_DIM = _env_int("GO2_POLICY_STABLE_LATENT_DIM", 8)
+GO2_POLICY_SWAV_NUM_PROTOTYPES = _env_int("GO2_POLICY_SWAV_NUM_PROTOTYPES", 64)
+GO2_POLICY_SWAV_TEMPERATURE = _env_float("GO2_POLICY_SWAV_TEMPERATURE", 0.1)
+GO2_POLICY_SWAV_EPSILON = _env_float("GO2_POLICY_SWAV_EPSILON", 0.05)
+GO2_POLICY_SWAV_SINKHORN_ITERS = _env_int("GO2_POLICY_SWAV_SINKHORN_ITERS", 3)
+GO2_POLICY_SWAV_PRIVILEGED_NOISE_STD = _env_float("GO2_POLICY_SWAV_PRIVILEGED_NOISE_STD", 0.005)
+GO2_POLICY_SWAV_PRIVILEGED_DROPOUT_PROB = _env_float("GO2_POLICY_SWAV_PRIVILEGED_DROPOUT_PROB", 0.02)
+GO2_POLICY_SWAV_HEIGHT_START = _env_int("GO2_POLICY_SWAV_HEIGHT_START", 76)
+GO2_POLICY_SWAV_HEIGHT_DIM = _env_int("GO2_POLICY_SWAV_HEIGHT_DIM", 187)
+GO2_POLICY_SWAV_HEIGHT_NOISE_STD = _env_float("GO2_POLICY_SWAV_HEIGHT_NOISE_STD", 0.02)
+GO2_POLICY_SWAV_HEIGHT_DROPOUT_PROB = _env_float("GO2_POLICY_SWAV_HEIGHT_DROPOUT_PROB", 0.1)
+GO2_ALG_STABLE_SWAV_COEF = _env_float("GO2_ALG_STABLE_SWAV_COEF", 0.01)
+
+GO2_PRIVILEGED_EXTRA_DIM = (
+    (1 if GO2_PRIVILEGED_INCLUDE_PAYLOAD else 0)
+    + (3 if GO2_PRIVILEGED_INCLUDE_BASE_COM else 0)
+    + (6 if GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH else 0)
+)
+
 class GO2Cfg(LeggedRobotCfg):
+    class ablation:
+        strict_baseline = GO2_STRICT_BASELINE_ABLATION
+        privileged_include_payload = GO2_PRIVILEGED_INCLUDE_PAYLOAD
+        privileged_include_base_com = GO2_PRIVILEGED_INCLUDE_BASE_COM
+        privileged_include_external_wrench = GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH
+        domain_use_enhanced_payload_range = GO2_DOMAIN_USE_ENHANCED_PAYLOAD_RANGE
+        domain_use_payload_curriculum = GO2_DOMAIN_USE_PAYLOAD_CURRICULUM
+        domain_use_enhanced_base_com_range = GO2_DOMAIN_USE_ENHANCED_BASE_COM_RANGE
+        domain_use_base_com_curriculum = GO2_DOMAIN_USE_BASE_COM_CURRICULUM
+        reward_use_lin_vel_z_clip = GO2_REWARD_USE_LIN_VEL_Z_CLIP
+
     class init_state(LeggedRobotCfg.init_state):
         pos = [0.0, 0.0, 0.42] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
@@ -33,8 +98,11 @@ class GO2Cfg(LeggedRobotCfg):
         num_envs = 8192
         num_observations = 45
         # proprioception(48) + foot contacts(4) + torques(12) + accelerations(12)
-        # + height_measurements(187) + payload_mass(1) + base_com_offset(3) + external_wrench(6)
-        num_privileged_obs = 45 + 3 + 4 + 12 + 12 + 187 + 1 + 3 + 6  # 273
+        # + height_measurements(187) + optional payload_mass(1), base_com_offset(3), external_wrench(6)
+        num_privileged_obs = 45 + 3 + 4 + 12 + 12 + 187 + GO2_PRIVILEGED_EXTRA_DIM
+        privileged_include_payload = GO2_PRIVILEGED_INCLUDE_PAYLOAD
+        privileged_include_base_com = GO2_PRIVILEGED_INCLUDE_BASE_COM
+        privileged_include_external_wrench = GO2_PRIVILEGED_INCLUDE_EXTERNAL_WRENCH
         # num_privileged_obs = 45 + 3 + 187  # 235
         # num_privileged_obs = 48  # without height measurements
         episode_length_s = 25
@@ -45,25 +113,25 @@ class GO2Cfg(LeggedRobotCfg):
         friction_range = [0.0, 2.0]
 
         randomize_base_mass = True
-        added_mass_range = [0., 3.]
+        added_mass_range = [0., 3.] if GO2_DOMAIN_USE_ENHANCED_PAYLOAD_RANGE else [-1., 1.]
         payload_mass_curriculum = {
             'start_iter': 0,
             'end_iter': 30000,
             'start_range': [0.0, 0.5],
             'end_range': [0.0, 3.0],
-        }
+        } if GO2_DOMAIN_USE_PAYLOAD_CURRICULUM else None
 
         randomize_link_mass = True
         multiplied_link_mass_range = [0.9, 1.1]
 
         randomize_base_com = True
-        added_base_com_range = [-0.06, 0.06]
+        added_base_com_range = [-0.06, 0.06] if GO2_DOMAIN_USE_ENHANCED_BASE_COM_RANGE else [-0.03, 0.03]
         base_com_curriculum = {
             'start_iter': 0,
             'end_iter': 30000,
             'start_range': [-0.01, 0.01],
             'end_range': [-0.06, 0.06],
-        }
+        } if GO2_DOMAIN_USE_BASE_COM_CURRICULUM else None
 
         randomize_restitution = True # restitution to robot links (Robot init)
         restitution_range = [0.0, 0.5]
@@ -121,6 +189,15 @@ class GO2Cfg(LeggedRobotCfg):
         limit_vel = {"lin_vel_x": [-1, 1], "lin_vel_y": [-1, 1], "ang_vel_yaw": [-1, 0, 1]} # sample vel commands from min [-1] or zero [0] or max [1] range only
         stop_heading_at_limit = True # stop heading updates when vel is limited
         dynamic_resample_commands = True # sample commands with low bounds
+        terrain_command_curriculum = True
+        terrain_command_curriculum_levels = 10
+        terrain_command_curriculum_min_episodes = 64
+        terrain_command_curriculum_score_up = 0.75
+        terrain_command_curriculum_score_down = 0.45
+        terrain_command_curriculum_fall_rate_up = 0.15
+        terrain_command_curriculum_fall_rate_down = 0.35
+        terrain_command_curriculum_tracking_lin_up = 0.70
+        terrain_command_curriculum_tracking_yaw_up = 0.60
         command_range_curriculum = [{ # list for command range curriculums at specific training iterations
             'iter': 20000, # training iteration at which the command ranges are updated
             'lin_vel_x': [-1.0, 1.0], # min max [m/s]
@@ -186,6 +263,7 @@ class GO2Cfg(LeggedRobotCfg):
             # "max_sigma": [1/3, 1/4, 1/4, 1/2.7, 1/2.7, 1/2, 1, 1, 1/4]
             "max_sigma": [5/12, 1/4, 1/4, 1/2, 1/2, 3/4, 1, 1, 1/4]
         }
+        lin_vel_z_clip = 5.0 if GO2_REWARD_USE_LIN_VEL_Z_CLIP else None
         min_legs_distance = 0.1  # min distance between legs to not be considered stumbling
         class scales:
             tracking_lin_vel = 1.0
@@ -288,23 +366,41 @@ class GO2CfgDualMoECTS(LeggedRobotCfgDualMoECTS):
 class GO2CfgMoECTS(LeggedRobotCfgMoECTS):
     class policy(LeggedRobotCfgMoECTS.policy):
         expert_num = 8  # number of experts in the student model
+        teacher_context_mode = GO2_POLICY_TEACHER_CONTEXT_MODE
         privileged_height_start = 76
-        privileged_height_dim = 187
-        privileged_height_latent_dim = 16
+        privileged_height_dim = 187 if GO2_POLICY_USE_HEIGHT_ENCODER else 0
+        privileged_height_latent_dim = 16 if GO2_POLICY_USE_HEIGHT_ENCODER else 0
         height_encoder_hidden_dims = [64, 32]
-        use_teacher_mixer = True
+        use_teacher_mixer = GO2_POLICY_USE_TEACHER_MIXER
+        detach_critic_context = GO2_POLICY_DETACH_CRITIC_CONTEXT
+        critic_use_privileged_obs = GO2_POLICY_CRITIC_USE_PRIVILEGED_OBS
         teacher_mixer_token_dim = 64
+        teacher_mixer_summary_tokens = GO2_POLICY_TEACHER_SUMMARY_TOKENS
+        teacher_mixer_summary_aggregation = GO2_POLICY_TEACHER_SUMMARY_AGGREGATION
         teacher_mixer_num_blocks = 2
         teacher_mixer_token_hidden_dim = 64
         teacher_mixer_channel_hidden_dim = 128
-        teacher_encoder_hidden_dims = [128]
-        use_actor_film = True
+        teacher_encoder_hidden_dims = [128] if GO2_POLICY_USE_TEACHER_MIXER else [512, 256]
+        use_actor_film = GO2_POLICY_USE_ACTOR_FILM
+        use_stable_swav = GO2_POLICY_USE_STABLE_SWAV
+        stable_latent_dim = GO2_POLICY_STABLE_LATENT_DIM
+        swav_num_prototypes = GO2_POLICY_SWAV_NUM_PROTOTYPES
+        swav_temperature = GO2_POLICY_SWAV_TEMPERATURE
+        swav_epsilon = GO2_POLICY_SWAV_EPSILON
+        swav_sinkhorn_iters = GO2_POLICY_SWAV_SINKHORN_ITERS
+        swav_privileged_noise_std = GO2_POLICY_SWAV_PRIVILEGED_NOISE_STD
+        swav_privileged_dropout_prob = GO2_POLICY_SWAV_PRIVILEGED_DROPOUT_PROB
+        swav_height_start = GO2_POLICY_SWAV_HEIGHT_START
+        swav_height_dim = GO2_POLICY_SWAV_HEIGHT_DIM
+        swav_height_noise_std = GO2_POLICY_SWAV_HEIGHT_NOISE_STD
+        swav_height_dropout_prob = GO2_POLICY_SWAV_HEIGHT_DROPOUT_PROB
 
     class algorithm(LeggedRobotCfgMoECTS.algorithm):
-        num_mini_batches = 16
+        num_mini_batches = 4
+        stable_swav_coef = GO2_ALG_STABLE_SWAV_COEF
     
     class runner(LeggedRobotCfgMoECTS.runner):
         run_name = ''
         experiment_name = 'go2_moe_cts'
         max_iterations = 150000
-        save_interval = 500
+        save_interval = 50

@@ -33,21 +33,26 @@ class Go2Robot(LeggedRobot):
         
         heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights, -1, 1.0) * self.obs_scales.height_measurements
         
-        self.privileged_obs_buf = torch.cat((  self.base_lin_vel * self.obs_scales.lin_vel,
-                                    self.base_ang_vel  * self.obs_scales.ang_vel,
-                                    self.projected_gravity,
-                                    self.commands[:, :3] * self.commands_scale,
-                                    (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
-                                    self.dof_vel * self.obs_scales.dof_vel,
-                                    self.actions,
-                                    torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) * 1e-3,  # foot contact forces (4,)
-                                    self.torques / self.torque_limits,  # motor torques (12,)
-                                    (self.last_dof_vel - self.dof_vel) / self.dt * 1e-4,  # motor accelerations (12,)
-                                    heights,  # height measurements (187,)
-                                    self.payload_masses,  # payload mass offset (1,)
-                                    self.base_com_offsets,  # base CoM offset xyz (3,)
-                                    self.external_wrenches,  # external disturbance signal (6,)
-                                    ),dim=-1)
+        privileged_obs_parts = [
+            self.base_lin_vel * self.obs_scales.lin_vel,
+            self.base_ang_vel  * self.obs_scales.ang_vel,
+            self.projected_gravity,
+            self.commands[:, :3] * self.commands_scale,
+            (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+            self.dof_vel * self.obs_scales.dof_vel,
+            self.actions,
+            torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) * 1e-3,  # foot contact forces (4,)
+            self.torques / self.torque_limits,  # motor torques (12,)
+            (self.last_dof_vel - self.dof_vel) / self.dt * 1e-4,  # motor accelerations (12,)
+            heights,  # height measurements (187,)
+        ]
+        if getattr(self.cfg.env, "privileged_include_payload", False):
+            privileged_obs_parts.append(self.payload_masses)  # payload mass offset (1,)
+        if getattr(self.cfg.env, "privileged_include_base_com", False):
+            privileged_obs_parts.append(self.base_com_offsets)  # base CoM offset xyz (3,)
+        if getattr(self.cfg.env, "privileged_include_external_wrench", False):
+            privileged_obs_parts.append(self.external_wrenches)  # external disturbance signal (6,)
+        self.privileged_obs_buf = torch.cat(privileged_obs_parts, dim=-1)
         # print(f"foot contact: {self.privileged_obs_buf[:,48:48+4].min(), self.privileged_obs_buf[:,48:48+4].max()}")
         # print(f"torques: {self.privileged_obs_buf[:,48+4:48+4+12].min(), self.privileged_obs_buf[:,48+4:48+4+12].max()}")
         # print(f"acc: {self.privileged_obs_buf[:,48+4+12:48+4+12+12].min(), self.privileged_obs_buf[:,48+4+12:48+4+12+12].max()}")

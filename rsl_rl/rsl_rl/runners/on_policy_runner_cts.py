@@ -86,7 +86,7 @@ class OnPolicyRunnerCTS:
             self.env.num_envs,
             history_length,
             **self.policy_cfg).to(self.device)
-        self.use_privileged_history = getattr(model, "use_teacher_mixer", False)
+        self.use_privileged_history = getattr(model, "requires_privileged_history", False)
         alg_class = eval(self.cfg["algorithm_class_name"])
         self.alg: Union[CTS, MoENGCTS, MCPCTS, ACMoECTS, DualMoECTS, MoECTS] = alg_class(model, self.env.num_envs, history_length, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
@@ -209,6 +209,26 @@ class OnPolicyRunnerCTS:
             self.writer.add_scalar('CTS/latent_l2', metrics["latent_l2"], it)
         if "latent_cosine_similarity" in metrics:
             self.writer.add_scalar('CTS/latent_cosine_similarity', metrics["latent_cosine_similarity"], it)
+        if "priv_history_last_abs_error_mean" in metrics:
+            self.writer.add_scalar(
+                'Debug/priv_history_last_abs_error_mean',
+                metrics["priv_history_last_abs_error_mean"],
+                it,
+            )
+        if "priv_history_last_abs_error_max" in metrics:
+            self.writer.add_scalar(
+                'Debug/priv_history_last_abs_error_max',
+                metrics["priv_history_last_abs_error_max"],
+                it,
+            )
+        if "stable_swav_loss" in metrics:
+            self.writer.add_scalar('SwAV/stable_loss', metrics["stable_swav_loss"], it)
+        if "stable_proto_entropy" in metrics:
+            self.writer.add_scalar('SwAV/prototype_entropy', metrics["stable_proto_entropy"], it)
+        if "stable_proto_usage" in metrics:
+            self.writer.add_scalar('SwAV/prototype_usage', metrics["stable_proto_usage"], it)
+        if "stable_dynamic_corr" in metrics:
+            self.writer.add_scalar('SwAV/stable_dynamic_corr', metrics["stable_dynamic_corr"], it)
 
     def _write_reward_metrics(self, locs):
         count = locs.get('rollout_reward_count', 0)

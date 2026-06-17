@@ -52,6 +52,7 @@ class MoECTS(CTS):
                 value_loss_coef=1.0,
                 entropy_coef=0.0,
                 load_balance_coef=0.01,
+                stable_swav_coef=0.0,
                 learning_rate=1e-3,
                 student_encoder_learning_rate=1e-3,
                 max_grad_norm=1.0,
@@ -94,6 +95,7 @@ class MoECTS(CTS):
         self.value_loss_coef = value_loss_coef
         self.entropy_coef = entropy_coef
         self.load_balance_coef = load_balance_coef
+        self.stable_swav_coef = stable_swav_coef
         self.gamma = gamma
         self.lam = lam
         self.max_grad_norm = max_grad_norm
@@ -116,14 +118,23 @@ class MoECTS(CTS):
         mean_latent_cosine = 0
         mean_gate_entropy = 0
         mean_gate_usage = None
+        mean_stable_swav_loss = 0.0
+        mean_stable_proto_entropy = 0.0
+        mean_stable_proto_usage = 0.0
+        mean_stable_dynamic_corr = 0.0
+        stable_swav_update_count = 0
+        priv_history_last_abs_error_sum = 0.0
+        priv_history_last_abs_error_max = 0.0
+        priv_history_last_abs_error_count = 0
         assert not self.model.is_recurrent
-        include_privileged_history = getattr(self.model, "use_teacher_mixer", False)
-        def mini_batches():
-            return self.storage.mini_batch_generator(
+        include_privileged_history = getattr(self.model, "requires_privileged_history", False)
+        data = list(
+            self.storage.mini_batch_generator(
                 self.num_mini_batches,
                 self.num_learning_epochs,
                 include_privileged_history=include_privileged_history,
             )
+        )
         def unpack_sample(sample):
             if include_privileged_history:
                 (
@@ -157,13 +168,33 @@ class MoECTS(CTS):
             )
         teacher_samples = self.teacher_num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
         student_samples = self.student_num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
-        for sample in mini_batches():
+        def track_privileged_history_alignment(privileged_obs_batch, privileged_history_batch):
+            nonlocal priv_history_last_abs_error_sum
+            nonlocal priv_history_last_abs_error_max
+            nonlocal priv_history_last_abs_error_count
+            if privileged_history_batch is None:
+                return
+            latest_privileged = privileged_history_batch.view(
+                privileged_history_batch.shape[0],
+                self.history_length,
+                self.model.num_critic_obs,
+            )[:, -1]
+            diff = (latest_privileged - privileged_obs_batch).abs()
+            priv_history_last_abs_error_sum += diff.mean().item()
+            priv_history_last_abs_error_max = max(
+                priv_history_last_abs_error_max,
+                diff.max().item(),
+            )
+            priv_history_last_abs_error_count += 1
+
+        for sample in data:
             (
                 obs_batch, privileged_obs_batch, actions_batch, history_batch, privileged_history_batch,
                 target_values_batch, advantages_batch, returns_batch,
                 old_actions_log_prob_batch, old_mu_batch, old_sigma_batch,
                 hid_states_batch, masks_batch
             ) = unpack_sample(sample)
+            track_privileged_history_alignment(privileged_obs_batch, privileged_history_batch)
             def get_results(start, end, is_teacher):
                 kwargs = {}
                 if privileged_history_batch is not None:
@@ -242,6 +273,15 @@ class MoECTS(CTS):
             # value_loss = teacher_value_loss  # + student_value_loss
 
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+            stable_swav_loss, stable_swav_metrics = self.model.stable_swav_loss(privileged_history_batch)
+            if stable_swav_loss is not None and self.stable_swav_coef > 0.0:
+                loss = loss + self.stable_swav_coef * stable_swav_loss
+            if stable_swav_loss is not None:
+                mean_stable_swav_loss += stable_swav_metrics.get("stable_swav_loss", 0.0)
+                mean_stable_proto_entropy += stable_swav_metrics.get("stable_proto_entropy", 0.0)
+                mean_stable_proto_usage += stable_swav_metrics.get("stable_proto_usage", 0.0)
+                mean_stable_dynamic_corr += stable_swav_metrics.get("stable_dynamic_corr", 0.0)
+                stable_swav_update_count += 1
 
             # Gradient step
             self.optimizer1.zero_grad()
@@ -249,12 +289,13 @@ class MoECTS(CTS):
             params_to_clip = itertools.chain.from_iterable(g['params'] for g in self.optimizer1.param_groups)
             nn.utils.clip_grad_norm_(params_to_clip, self.max_grad_norm)
             self.optimizer1.step()
+            self.model.normalize_swav_prototypes()
 
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy_loss += entropy_batch.mean().item()
         
-        for sample in mini_batches():
+        for sample in data:
             (
                 obs_batch, privileged_obs_batch, actions_batch, history_batch, privileged_history_batch,
                 target_values_batch, advantages_batch, returns_batch,
@@ -310,6 +351,17 @@ class MoECTS(CTS):
         mean_latent_cosine /= num_updates
         mean_gate_entropy /= num_updates
         mean_gate_usage = mean_gate_usage / num_updates
+        if priv_history_last_abs_error_count > 0:
+            priv_history_last_abs_error_mean = (
+                priv_history_last_abs_error_sum / priv_history_last_abs_error_count
+            )
+        else:
+            priv_history_last_abs_error_mean = 0.0
+        if stable_swav_update_count > 0:
+            mean_stable_swav_loss /= stable_swav_update_count
+            mean_stable_proto_entropy /= stable_swav_update_count
+            mean_stable_proto_usage /= stable_swav_update_count
+            mean_stable_dynamic_corr /= stable_swav_update_count
         self.tb_metrics = {
             "latent_l2": mean_latent_l2,
             "latent_cosine_similarity": mean_latent_cosine,
@@ -318,6 +370,12 @@ class MoECTS(CTS):
             "gate_usage_max": mean_gate_usage.max().item(),
             "gate_usage_min": mean_gate_usage.min().item(),
             "gate_usage_std": mean_gate_usage.std(unbiased=False).item(),
+            "priv_history_last_abs_error_mean": priv_history_last_abs_error_mean,
+            "priv_history_last_abs_error_max": priv_history_last_abs_error_max,
+            "stable_swav_loss": mean_stable_swav_loss,
+            "stable_proto_entropy": mean_stable_proto_entropy,
+            "stable_proto_usage": mean_stable_proto_usage,
+            "stable_dynamic_corr": mean_stable_dynamic_corr,
         }
         self.storage.clear()
 
