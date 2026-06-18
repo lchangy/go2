@@ -53,6 +53,12 @@ GO2_ALG_NUM_MINI_BATCHES = _env_int("GO2_ALG_NUM_MINI_BATCHES", 4)
 GO2_ALG_LEARNING_RATE = _env_float("GO2_ALG_LEARNING_RATE", 1e-3)
 GO2_ALG_STUDENT_ENCODER_LEARNING_RATE = _env_float("GO2_ALG_STUDENT_ENCODER_LEARNING_RATE", 1e-3)
 GO2_ALG_STABLE_SWAV_COEF = _env_float("GO2_ALG_STABLE_SWAV_COEF", 0.01)
+GO2_ALG_USE_EMA_TEACHER = _env_bool("GO2_ALG_USE_EMA_TEACHER", False)
+GO2_ALG_EMA_TEACHER_DECAY = _env_float("GO2_ALG_EMA_TEACHER_DECAY", 0.995)
+GO2_ALG_EMA_TEACHER_WARMUP_UPDATES = _env_int("GO2_ALG_EMA_TEACHER_WARMUP_UPDATES", 100)
+GO2_REWARD_COLLISION_SCALE = _env_float("GO2_REWARD_COLLISION_SCALE", -2.0)
+GO2_REWARD_FEET_REGULATION_SCALE = _env_float("GO2_REWARD_FEET_REGULATION_SCALE", -0.15)
+GO2_REWARD_SIMILAR_TO_DEFAULT_SCALE = _env_float("GO2_REWARD_SIMILAR_TO_DEFAULT_SCALE", -0.04)
 
 GO2_PRIVILEGED_EXTRA_DIM = (
     (1 if GO2_PRIVILEGED_INCLUDE_PAYLOAD else 0)
@@ -287,14 +293,14 @@ class GO2Cfg(LeggedRobotCfg):
             correct_base_height = -1.0
             action_rate = -0.01
             action_smoothness = -0.01
-            collision = -1.0
+            collision = GO2_REWARD_COLLISION_SCALE
             dof_pos_limits = -2.0
-            feet_regulation = -0.05
+            feet_regulation = GO2_REWARD_FEET_REGULATION_SCALE
             # CTS reward trains to have very close feet distance, real robot performance is poor, but sim2sim can climb 20cm stairs, try to add hip_to_default reward or similar_to_default reward
             # training to y=1.5, font feet will collide noticeably, max y=1.0
             hip_to_default = -0.05
             # legs_distance = -1.5  # not good performance, avoid leg collision
-            similar_to_default = -0.01
+            similar_to_default = GO2_REWARD_SIMILAR_TO_DEFAULT_SCALE
             # feet_contact_forces = -1.0  # try to add but no effect, remove
 
         turn_over_roll_threshold = math.pi / 4 # threshold on roll to use turn over rewards
@@ -411,6 +417,9 @@ class GO2CfgMoECTS(LeggedRobotCfgMoECTS):
         learning_rate = GO2_ALG_LEARNING_RATE
         student_encoder_learning_rate = GO2_ALG_STUDENT_ENCODER_LEARNING_RATE
         stable_swav_coef = GO2_ALG_STABLE_SWAV_COEF
+        use_ema_teacher = GO2_ALG_USE_EMA_TEACHER
+        ema_teacher_decay = GO2_ALG_EMA_TEACHER_DECAY
+        ema_teacher_warmup_updates = GO2_ALG_EMA_TEACHER_WARMUP_UPDATES
     
     class runner(LeggedRobotCfgMoECTS.runner):
         run_name = ''

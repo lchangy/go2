@@ -33,6 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+import copy
 import itertools
 from rsl_rl.modules import ActorCriticMoECTS
 from rsl_rl.storage import RolloutStorageCTS
@@ -53,6 +54,9 @@ class MoECTS(CTS):
                 entropy_coef=0.0,
                 load_balance_coef=0.01,
                 stable_swav_coef=0.0,
+                use_ema_teacher=False,
+                ema_teacher_decay=0.995,
+                ema_teacher_warmup_updates=100,
                 learning_rate=1e-3,
                 student_encoder_learning_rate=1e-3,
                 max_grad_norm=1.0,
@@ -96,6 +100,17 @@ class MoECTS(CTS):
         self.entropy_coef = entropy_coef
         self.load_balance_coef = load_balance_coef
         self.stable_swav_coef = stable_swav_coef
+        self.use_ema_teacher = use_ema_teacher
+        self.ema_teacher_decay = ema_teacher_decay
+        self.ema_teacher_warmup_updates = ema_teacher_warmup_updates
+        self.ema_teacher_updates = 0
+        self.ema_teacher_effective_decay = 0.0
+        self.ema_model = None
+        if self.use_ema_teacher:
+            self.ema_model = copy.deepcopy(self.model).to(self.device)
+            self.ema_model.eval()
+            for param in self.ema_model.parameters():
+                param.requires_grad_(False)
         self.gamma = gamma
         self.lam = lam
         self.max_grad_norm = max_grad_norm
@@ -108,14 +123,78 @@ class MoECTS(CTS):
         assert len(self.teacher_env_idxs) == self.teacher_num_envs, f"{len(self.teacher_env_idxs)=} != {self.teacher_num_envs=}"
         assert len(self.student_env_idxs) == self.student_num_envs, f"{len(self.student_env_idxs)=} != {self.student_num_envs=}"
 
+    def _current_ema_teacher_decay(self):
+        if not self.use_ema_teacher:
+            return 0.0
+        if self.ema_teacher_warmup_updates <= 0:
+            return self.ema_teacher_decay
+        warmup_fraction = min(
+            1.0,
+            float(self.ema_teacher_updates + 1) / float(self.ema_teacher_warmup_updates),
+        )
+        return self.ema_teacher_decay * warmup_fraction
+
+    @torch.no_grad()
+    def _update_ema_teacher(self):
+        if not self.use_ema_teacher:
+            return
+        decay = self._current_ema_teacher_decay()
+        online_params = dict(self.model.named_parameters())
+        for name, ema_param in self.ema_model.named_parameters():
+            online_param = online_params.get(name)
+            if online_param is None:
+                continue
+            ema_param.data.mul_(decay).add_(online_param.data, alpha=1.0 - decay)
+        self.ema_teacher_updates += 1
+        self.ema_teacher_effective_decay = decay
+
+    @torch.no_grad()
+    def reset_ema_teacher(self):
+        if not self.use_ema_teacher:
+            return
+        self.ema_model.load_state_dict(self.model.state_dict())
+        self.ema_teacher_updates = 0
+        self.ema_teacher_effective_decay = 0.0
+
+    def ema_teacher_state_dict(self):
+        if not self.use_ema_teacher:
+            return None
+        return {
+            "model_state_dict": self.ema_model.state_dict(),
+            "updates": self.ema_teacher_updates,
+            "effective_decay": self.ema_teacher_effective_decay,
+        }
+
+    def load_ema_teacher_state_dict(self, state):
+        if not self.use_ema_teacher:
+            return
+        assert state is not None and "model_state_dict" in state, "EMA teacher state is required when EMA teacher is enabled"
+        self.ema_model.load_state_dict(state["model_state_dict"])
+        self.ema_teacher_updates = int(state["updates"])
+        self.ema_teacher_effective_decay = float(state["effective_decay"])
+        self.ema_model.eval()
+
+    def encode_teacher_latent_target(self, privileged_obs, history=None, privileged_history=None):
+        target_model = self.ema_model if self.use_ema_teacher else self.model
+        return target_model.encode_teacher_latent(
+            privileged_obs,
+            history=history,
+            privileged_history=privileged_history,
+        )
+
     def update(self):
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_entropy_loss = 0
         mean_latent_loss = 0
+        mean_latent_stable_mse = 0.0
+        mean_latent_dynamic_mse = 0.0
         mean_load_balance_loss = 0
         mean_latent_l2 = 0
         mean_latent_cosine = 0
+        mean_ema_teacher_online_l2 = 0.0
+        mean_ema_teacher_online_cosine = 0.0
+        ema_teacher_metric_count = 0
         mean_gate_entropy = 0
         mean_gate_usage = None
         mean_stable_swav_loss = 0.0
@@ -319,6 +398,8 @@ class MoECTS(CTS):
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy_loss += entropy_batch.mean().item()
+
+        self._update_ema_teacher()
         
         for sample in data:
             (
@@ -333,12 +414,36 @@ class MoECTS(CTS):
                 teacher_privileged_history = None
                 if privileged_history_batch is not None:
                     teacher_privileged_history = privileged_history_batch[teacher_samples:]
-                teacher_latent = self.model.encode_teacher_latent(
+                teacher_latent = self.encode_teacher_latent_target(
                     privileged_obs_batch[teacher_samples:],
                     history=history_batch[teacher_samples:],
                     privileged_history=teacher_privileged_history,
                 )
+                if self.use_ema_teacher:
+                    online_teacher_latent = self.model.encode_teacher_latent(
+                        privileged_obs_batch[teacher_samples:],
+                        history=history_batch[teacher_samples:],
+                        privileged_history=teacher_privileged_history,
+                    )
+                    mean_ema_teacher_online_l2 += torch.norm(
+                        online_teacher_latent - teacher_latent,
+                        dim=1,
+                    ).mean().item()
+                    mean_ema_teacher_online_cosine += F.cosine_similarity(
+                        online_teacher_latent,
+                        teacher_latent,
+                        dim=1,
+                    ).mean().item()
+                    ema_teacher_metric_count += 1
             latent_loss = (teacher_latent - student_latent).pow(2).mean()
+            latent_error = teacher_latent - student_latent
+            stable_dim = getattr(self.model, "stable_latent_dim", 0)
+            if 0 < stable_dim < latent_error.shape[1]:
+                latent_stable_mse = latent_error[:, :stable_dim].pow(2).mean()
+                latent_dynamic_mse = latent_error[:, stable_dim:].pow(2).mean()
+            else:
+                latent_stable_mse = latent_loss.new_tensor(0.0)
+                latent_dynamic_mse = latent_loss
             latent_l2 = torch.norm(teacher_latent - student_latent, dim=1).mean()
             latent_cosine = F.cosine_similarity(teacher_latent, student_latent, dim=1).mean()
 
@@ -357,6 +462,8 @@ class MoECTS(CTS):
             self.optimizer2.step()
 
             mean_latent_loss += latent_loss.item()
+            mean_latent_stable_mse += latent_stable_mse.item()
+            mean_latent_dynamic_mse += latent_dynamic_mse.item()
             mean_load_balance_loss += load_balance_loss.item()
             mean_latent_l2 += latent_l2.item()
             mean_latent_cosine += latent_cosine.item()
@@ -371,6 +478,8 @@ class MoECTS(CTS):
         mean_surrogate_loss /= num_updates
         mean_entropy_loss /= num_updates
         mean_latent_loss /= num_updates
+        mean_latent_stable_mse /= num_updates
+        mean_latent_dynamic_mse /= num_updates
         mean_load_balance_loss /= num_updates
         mean_latent_l2 /= num_updates
         mean_latent_cosine /= num_updates
@@ -389,9 +498,14 @@ class MoECTS(CTS):
             mean_stable_dynamic_corr /= stable_swav_update_count
         if film_grad_norm_count > 0:
             mean_film_grad_norm /= film_grad_norm_count
+        if ema_teacher_metric_count > 0:
+            mean_ema_teacher_online_l2 /= ema_teacher_metric_count
+            mean_ema_teacher_online_cosine /= ema_teacher_metric_count
         self.tb_metrics = {
             "latent_l2": mean_latent_l2,
             "latent_cosine_similarity": mean_latent_cosine,
+            "latent_stable_mse": mean_latent_stable_mse,
+            "latent_dynamic_mse": mean_latent_dynamic_mse,
             "gate_entropy": mean_gate_entropy,
             "gate_usage": mean_gate_usage.detach().cpu(),
             "gate_usage_max": mean_gate_usage.max().item(),
@@ -403,6 +517,12 @@ class MoECTS(CTS):
             "stable_proto_entropy": mean_stable_proto_entropy,
             "stable_proto_usage": mean_stable_proto_usage,
             "stable_dynamic_corr": mean_stable_dynamic_corr,
+            "ema_teacher_enabled": float(self.use_ema_teacher),
+            "ema_teacher_decay": self.ema_teacher_decay,
+            "ema_teacher_effective_decay": self.ema_teacher_effective_decay,
+            "ema_teacher_updates": float(self.ema_teacher_updates),
+            "ema_teacher_online_l2": mean_ema_teacher_online_l2,
+            "ema_teacher_online_cosine": mean_ema_teacher_online_cosine,
         }
         if self.model.use_actor_film:
             self.tb_metrics.update({

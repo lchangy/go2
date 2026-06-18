@@ -209,6 +209,14 @@ class OnPolicyRunnerCTS:
             self.writer.add_scalar('CTS/latent_l2', metrics["latent_l2"], it)
         if "latent_cosine_similarity" in metrics:
             self.writer.add_scalar('CTS/latent_cosine_similarity', metrics["latent_cosine_similarity"], it)
+        if "latent_stable_mse" in metrics:
+            self.writer.add_scalar('CTS/latent_stable_mse', metrics["latent_stable_mse"], it)
+        if "latent_dynamic_mse" in metrics:
+            self.writer.add_scalar('CTS/latent_dynamic_mse', metrics["latent_dynamic_mse"], it)
+        ema_prefix = "ema_teacher_"
+        for key, value in metrics.items():
+            if key.startswith(ema_prefix):
+                self.writer.add_scalar(f'EMA/{key[len(ema_prefix):]}', value, it)
         if "priv_history_last_abs_error_mean" in metrics:
             self.writer.add_scalar(
                 'Debug/priv_history_last_abs_error_mean',
@@ -504,6 +512,7 @@ class OnPolicyRunnerCTS:
             'model_state_dict': self.alg.model.state_dict(),
             'optimizer1_state_dict': self.alg.optimizer1.state_dict(),
             'optimizer2_state_dict': self.alg.optimizer2.state_dict(),
+            'ema_teacher_state_dict': self.alg.ema_teacher_state_dict() if hasattr(self.alg, "ema_teacher_state_dict") else None,
             'iter': self.current_learning_iteration,
             'infos': infos,
             }, path)
@@ -578,6 +587,8 @@ class OnPolicyRunnerCTS:
         if load_optimizer:
             self.alg.optimizer1.load_state_dict(loaded_dict['optimizer1_state_dict'])
             self.alg.optimizer2.load_state_dict(loaded_dict['optimizer2_state_dict'])
+        if hasattr(self.alg, "load_ema_teacher_state_dict"):
+            self.alg.load_ema_teacher_state_dict(loaded_dict['ema_teacher_state_dict'])
         self.current_learning_iteration = loaded_dict['iter']
         return loaded_dict['infos']
 
